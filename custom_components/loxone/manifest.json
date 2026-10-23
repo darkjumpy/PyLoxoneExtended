@@ -1,6 +1,6 @@
 {
   "domain": "loxone",
-  "name": "PyLoxone Extendedd",
+  "name": "PyLoxone Extended",
   "codeowners": ["@darkjumpy"],
   "config_flow": true,
   "dependencies": [],
