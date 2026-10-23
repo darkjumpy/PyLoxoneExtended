@@ -26,6 +26,7 @@ def test_spotify_status():
                 "album": "Example album",
                 "coverurl": "/covers/10.jpg",
                 "audiotype": 5,
+                "source": "Spotify",
                 "duration": 210,
                 "time": 19,
             }
