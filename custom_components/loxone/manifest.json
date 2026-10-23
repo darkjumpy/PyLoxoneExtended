@@ -1,15 +1,15 @@
 {
   "domain": "loxone",
-  "name": "PyLoxone",
-  "codeowners": ["@JoDehli"],
+  "name": "PyLoxone Extendedd",
+  "codeowners": ["@darkjumpy"],
   "config_flow": true,
   "dependencies": [],
-  "documentation": "https://github.com/JoDehli/PyLoxone",
+  "documentation": "https://github.com/darkjumpy/PyLoxoneExtended",
   "iot_class": "local_polling",
-  "issue_tracker": "https://github.com/JoDehli/PyLoxone/issues",
+  "issue_tracker": "https://github.com/darkjumpy/PyLoxoneExtended/issues",
   "requirements": [
     "websockets>=14,<16",
     "pycryptodome>=3.20"
   ],
-  "version": "0.10.1"
+  "version": "0.10.1+extended.1"
 }
