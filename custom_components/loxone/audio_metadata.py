@@ -11,18 +11,6 @@ from dataclasses import dataclass
 from typing import Any
 from urllib.parse import urljoin, urlsplit
 
-_AUDIO_TYPES = {
-    0: "Local",
-    1: "Radio",
-    2: "Playlist",
-    3: "Line-In",
-    4: "AirPlay",
-    5: "Spotify",
-    6: "Bluetooth",
-    7: "SoundSuit",
-}
-
-
 @dataclass(frozen=True)
 class AudioMetadata:
     title: str | None = None
@@ -133,12 +121,6 @@ def parse_audio_status(payload: Any, server_base_url: str) -> AudioMetadata | No
     if cover is None:
         cover = _value(data, "coverurl", "coverUrl", "cover", "artwork", "image")
     source = _text(_value(data, "source", "service", "serviceName"))
-    audio_type = _value(data, "audiotype", "audioType")
-    if not source and audio_type is not None:
-        try:
-            source = _AUDIO_TYPES.get(int(audio_type))
-        except (ValueError, TypeError):
-            pass
 
     duration = _seconds(_value(track, "duration") or _value(data, "duration"))
     position = _seconds(_value(data, "time", "position", "currentTime"))
