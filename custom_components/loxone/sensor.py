@@ -345,6 +345,9 @@ async def async_setup_entry(
 AIR_VALVE_DIAGNOSTIC_FIELDS = {
     "requested_percent": ("Zadane otwarcie", PERCENTAGE),
     "destination_percent": ("Otwarcie docelowe", PERCENTAGE),
+    "estimated_opening": ("Szacowane otwarcie fizyczne", PERCENTAGE),
+    "motor_steps": ("Pozycja silnika", None),
+    "max_steps": ("Maksymalna pozycja silnika", None),
     "reference_state": ("Stan kalibracji", None),
     "rssi_rx": ("RSSI odbiór", "dBm"),
     "rssi_tx": ("RSSI nadawanie", "dBm"),
@@ -433,6 +436,13 @@ class LoxoneAirValveDiagnosticSensor(SensorEntity):
         self._field = field
         self._attr_native_value = None
         self._attr_available = False
+        if field == "estimated_opening":
+            self._attr_extra_state_attributes = {
+                "estimated": True,
+                "source": "TechReport.Pos and MaxPos",
+                "condition": "calibrated and idle",
+                "not_confirmed_physical_opening": True,
+            }
         if field not in ("reference_state",):
             self._attr_state_class = SensorStateClass.MEASUREMENT
 
