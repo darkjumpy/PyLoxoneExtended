@@ -103,6 +103,32 @@ The \`DriveTo\` device shell command is visible in the real device's
 semantics are **unverified**. Do not send guessed percentages or
 raw step counts to this service command.
 
+## Air battery sleep / DriveTo readiness gate
+
+The direct DriveTo slider uses this flow when the paired head is battery
+powered or the supply mode is not known:
+
+1. Send a *read-only* \`TechReport\` to that head's verified Air serial.
+2. If Miniserver returns an LL \`Code=200\` XML report with matching serial,
+   immediately send \`DriveTo/<integer percent>\`.
+3. If the device sleeps, returns timeout, or the serial cannot be confirmed,
+   do **not** send a speculative DriveTo and show a clear error in HA.
+4. After \`DriveTo\`, only LL \`value=ok\` counts as acknowledgement;
+   \`value=timeout\` is **not** success and is never blindly retried.
+   Even an \`ok\` response is *not* proof of the final motor position.
+
+**A diagnostic probe cannot itself wake a sleeping battery head.** Official
+Loxone guidance: "Keep device awake" in Loxone Config makes a battery Air
+device remain active for five minutes **after its next natural wake-up**;
+pressing its button can wake it earlier. No verified HTTP API endpoint is
+currently known to arm this function, so the integration does not make up a
+wakeup command or claim that sending a TechReport wakes the head.
+
+The guard prevents avoidable failures, but does not implement automatic
+wake-up or reliable background delivery. If unattended positioning is
+required, this remains a limitation of the experimental direct-device-shell
+approach. Powered heads do not require this preflight.
+
 ## Restart vs calibration
 
 A button named **Uruchom ponownie głowicę** is offered if the project
