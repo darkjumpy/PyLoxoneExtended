@@ -1,0 +1,68 @@
+name: Validate Air diagnostic parsers
+
+on:
+  push:
+    branches: [feature/air-valve-manual-controls]
+    paths:
+      - .github/workflows/validate-air-diagnostics.yml
+      - custom_components/loxone/valve_air.py
+      - custom_components/loxone/sensor.py
+      - tests/test_air_valve_extended.py
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  parser-smoke-test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Python syntax and stand-alone XML parser tests
+        shell: bash
+        run: |
+          set -euo pipefail
+          python -m compileall -q custom_components/loxone tests
+          python - <<'PY'
+          import ast
+          import re
+          import xml.etree.ElementTree as ET
+          from pathlib import Path
+          path = Path("custom_components/loxone/valve_air.py")
+          source = ast.parse(path.read_text(encoding="utf-8"))
+          wanted = {
+              "_device_serial",
+              "parse_device_report_response",
+              "parse_valve_tech_report",
+              "parse_link_quality_report",
+          }
+          constants = {"_TECH_FIELDS", "_LINK_FIELDS"}
+          nodes = []
+          for node in source.body:
+              if isinstance(node, ast.FunctionDef) and node.name in wanted:
+                  nodes.append(node)
+              elif isinstance(node, ast.Assign) and any(
+                  isinstance(t, ast.Name) and t.id in constants for t in node.targets
+              ):
+                  nodes.append(node)
+          assert len(nodes) == 6, [getattr(n, "name", "?") for n in nodes]
+          namespace = {"re": re, "ET": ET}
+          exec(compile(ast.Module(body=nodes, type_ignores=[]), str(path), "exec"), namespace)
+          payload = (b'<LL Code="200" value="Serial:0123456789ABCDEF;Pos:2364;'
+                     b'RequestedPercent:0;DestinationPercent:0;BatteryPowered:0;'
+                     b'RefDriveState:successful;Batt[%]:127;"/>')
+          text = namespace["parse_device_report_response"](payload)
+          assert text is not None
+          values = namespace["parse_valve_tech_report"](text)
+          assert values["motor_steps"] == 2364, values
+          assert values["requested_percent"] == 0, values
+          assert values["reference_state"] == "successful", values
+          assert values["battery_powered"] is False, values
+          assert "battery_level" not in values, values
+          assert namespace["parse_device_report_response"](b'<LL Code="401" value="x"/>') is None
+          assert namespace["_device_serial"]("01:23:45:67:89:AB:CD:EF") == "0123456789ABCDEF"
+          link = "Target: 01:23:45:67:89:AB:CD:EF;AvgRssiRx: -83;AvgLqiRx %: 97;ErrorRate %: 0;"
+          quality = namespace["parse_link_quality_report"](link)
+          assert quality == {"rssi_rx": -83.0, "lqi_rx": 97.0, "error_rate": 0.0}, quality
+          print("Air XML report parsing and link quality smoke tests passed.")
+          PY
