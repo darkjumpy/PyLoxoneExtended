@@ -7,11 +7,13 @@ from custom_components.loxone.valve_air import (
     extract_air_valves,
     battery_supply_from_attribute,
     linked_terminal_ids,
+    _manual_inputs,
+    _device_serial,
 )
 
 PROGRAM = b"""<?xml version="1.0"?>
 <Loxone>
-  <C Type="LoxAIRDevice" U="device-valve-1" Title="Si\xc5\x82ownik Air Salon" Battery="true">
+  <C Type="LoxAIRDevice" U="device-valve-1" Title="Si\xc5\x82ownik Air Salon" Battery="true" Serial="50:4F:94:AA:BB:CC">
     <C Type="LoxAIRAsensor" U="valve-t" Title="Temperatura">
       <Display Unit="&lt;v.1&gt;\xc2\xb0"/>
     </C>
@@ -25,6 +27,8 @@ PROGRAM = b"""<?xml version="1.0"?>
   <C Type="LoxAIRDevice" U="device-valve-3" Title="Valve Actuator Office">
     <C Type="LoxAIRAactor" U="valve-c" Title="Valve Actuator Office"/>
   </C>
+  <C Type="VirtualIn" U="manual-v" Analog="true" Title="HA Valve | Si\xc5\x82ownik Air Salon | Value"/>
+  <C Type="VirtualIn" U="manual-e" Analog="false" Title="HA Valve | Si\xc5\x82ownik Air Salon | Manual"/>
   <C Type="LoxAIRDevice" U="device-touch" Title="Touch Air">
     <C Type="LoxAIRAsensor" U="touch-t" Title="Temperatura"/>
   </C>
@@ -70,3 +74,18 @@ def test_pairing_power_mode_is_not_guessed():
     assert battery_supply_from_attribute("0") is False
     assert battery_supply_from_attribute(None) is None
     assert battery_supply_from_attribute("unknown") is None
+
+
+def test_manual_pair_only_for_exact_analog_and_digital_virtual_inputs():
+    from xml.etree import ElementTree as ET
+    terminal = next(t for t in extract_air_valves(PROGRAM) if t.device_uuid == "device-valve-1")
+    assert terminal.manual_value_uuid == "manual-v"
+    assert terminal.manual_enable_uuid == "manual-e"
+    assert terminal.serial == "504F94AABBCC"
+    other = next(t for t in extract_air_valves(PROGRAM) if t.device_uuid == "device-valve-2")
+    assert other.manual_value_uuid is None
+    assert other.manual_enable_uuid is None
+    assert _manual_inputs(ET.fromstring(PROGRAM), "unknown") == (None, None)
+    assert _device_serial("50:4F:94:AA:BB:CC") == "504F94AABBCC"
+    assert _device_serial("../Reboot") is None
+    assert _device_serial("oops") is None
