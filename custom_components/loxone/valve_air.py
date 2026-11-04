@@ -48,6 +48,7 @@ class AirValveTerminal:
     unit: str | None
     category: str | None = None
     room_uuid: str | None = None
+    battery_powered: bool | None = None
 
 
 def _decode_loxcc(data: bytes) -> bytes | None:
@@ -124,6 +125,22 @@ def decode_program(data: bytes) -> bytes | None:
     return _decode_loxcc(data)
 
 
+def battery_supply_from_attribute(value: str | None) -> bool | None:
+    """Read the persisted Loxone Air pairing power mode, not live voltage.
+
+    "Battery=true" in a LoxAIRDevice denotes battery operation.
+    Missing or unknown values cannot safely be interpreted as external power.
+    """
+    if value is None:
+        return None
+    normalized = value.strip().lower()
+    if normalized in ("true", "1"):
+        return True
+    if normalized in ("false", "0"):
+        return False
+    return None
+
+
 def _name_contains(name: str, words: tuple[str, ...]) -> bool:
     low = name.casefold()
     return any(word in low for word in words)
@@ -163,6 +180,7 @@ def extract_air_valves(xml: bytes) -> list[AirValveTerminal]:
         title = (device.get("Title") or "").strip()
         if not uuid:
             continue
+        battery_powered = battery_supply_from_attribute(device.get("Battery"))
         children = list(device.iter("C"))[1:]
         analog_outputs = [el for el in children if el.get("Type") == "LoxAIRAactor"]
         is_valve = _name_contains(title, _VALVE_NAMES) or any(
@@ -208,6 +226,7 @@ def extract_air_valves(xml: bytes) -> list[AirValveTerminal]:
                     uuid=term_uuid, device_uuid=uuid, device_name=title or "Valve Actuator Air",
                     name=name, kind="analog" if kind in _ANALOG_TYPES else "digital",
                     unit=unit, category=category, room_uuid=room,
+                    battery_powered=battery_powered,
                 )
             )
             seen.add(term_uuid.lower())
@@ -263,9 +282,7 @@ async def _fetch_project(session: ClientSession, config_entry) -> bytes | None:
 
 
 async def async_get_air_valves(hass, miniserver, config_entry) -> list[AirValveTerminal]:
-    """Perform opt-in discovery once per Miniserver, shared by HA platforms."""
-    if not config_entry.options.get("enable_air_valve_discovery", False):
-        return []
+    """Discover automatically once per Miniserver, shared by HA platforms."""
     task = getattr(miniserver, "_air_valve_task", None)
     if task is None:
         async def load() -> list[AirValveTerminal]:
