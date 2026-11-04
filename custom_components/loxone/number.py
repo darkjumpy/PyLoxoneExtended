@@ -25,7 +25,7 @@ from .miniserver import get_miniserver_from_hass
 from .valve_air import (
     air_terminal_poll_interval, async_get_air_valves, async_read_terminal,
     async_set_valve_virtual_input, expected_valve_input_name,
-    valve_output_to_percent,
+    valve_output_to_percent, serial_from_ha_valve_slider,
 )
 from homeassistant.helpers.aiohttp_client import async_get_clientsession
 from homeassistant.helpers.event import async_track_time_interval
@@ -54,16 +54,53 @@ async def async_setup_entry(
     loxconfig = miniserver.lox_config.json
     entities = []
     air_valves = await async_get_air_valves(hass, miniserver, config_entry)
-    # One real Loxone analog Virtual Input per physical Air valve.
-    # No direct DriveTo writes, no Air device-shell retries.
-    unique = {t.device_uuid: t for t in air_valves}
-    for terminal in unique.values():
-        entities.append(LoxoneAirValveVirtualInputNumber(terminal, config_entry))
+    # Loxone publishes analog Virtual Inputs as ordinary Slider controls in
+    # LoxAPP3. Prefer their event-backed native entity and reparent that same
+    # entity to the physical Air valve. Avoid a second physical slider.
+    from collections import defaultdict
 
-    for number_entity in get_all(loxconfig, ["Slider", "ValueSelector"]):
-        number_entity = add_room_and_cat_to_value_values(loxconfig, number_entity)
-        new_number = LoxoneNumber(**number_entity)
-        entities.append(new_number)
+    unique = {t.device_uuid: t for t in air_valves}
+    head_by_serial = {t.serial: t for t in unique.values() if t.serial}
+    ui_sliders = get_all(loxconfig, ["Slider", "ValueSelector"])
+    matches: dict[str, list[dict]] = defaultdict(list)
+    for control in ui_sliders:
+        if control.get("type") != "Slider":
+            continue
+        serial = serial_from_ha_valve_slider(control.get("name"))
+        if serial in head_by_serial:
+            matches[serial].append(control)
+
+    selected_controls: dict[int, object] = {}
+    for serial, candidates in matches.items():
+        if len(candidates) == 1:
+            selected_controls[id(candidates[0])] = head_by_serial[serial]
+        else:
+            _LOGGER.warning(
+                "Several Loxone HA Valve sliders match Air serial %s; "
+                "refusing ambiguous valve mapping",
+                serial,
+            )
+
+    mapped_devices = {t.device_uuid for t in selected_controls.values()}
+    for terminal in unique.values():
+        if terminal.device_uuid not in mapped_devices:
+            # Fallback to an existing verified input in the installed
+            # program, if the visualization did not publish a Slider.
+            entities.append(LoxoneAirValveVirtualInputNumber(terminal, config_entry))
+
+    for raw in ui_sliders:
+        serial = serial_from_ha_valve_slider(raw.get("name"))
+        if id(raw) in selected_controls:
+            terminal = selected_controls[id(raw)]
+            enriched = add_room_and_cat_to_value_values(loxconfig, raw)
+            entities.append(LoxoneAirValveMappedSlider(terminal, **enriched))
+        elif serial in head_by_serial:
+            # When >1 Slider matches a head, skip them rather than show
+            # independently actionable duplicate valve controls.
+            continue
+        else:
+            enriched = add_room_and_cat_to_value_values(loxconfig, raw)
+            entities.append(LoxoneNumber(**enriched))
 
     async_add_entities(entities)
 
@@ -275,3 +312,59 @@ class LoxoneNumber(LoxoneEntity, NumberEntity):
             SENDDOMAIN, dict(uuid=self.uuidAction, value="{}".format(value))
         )
         self.async_schedule_update_ha_state()
+
+
+class LoxoneAirValveMappedSlider(LoxoneNumber):
+    """Reuse the actual UI Slider but show it inside its physical Air valve.
+
+    The underlying Loxone Slider communicates over the existing websocket
+    and retains its original unique ID. Only UI display/units are scaled.
+    """
+
+    _attr_entity_category = EntityCategory.CONFIG
+    _attr_icon = "mdi:valve"
+
+    def __init__(self, terminal, **kwargs):
+        kwargs["parent_id"] = terminal.device_uuid
+        kwargs["name"] = "Otwarcie zadane (HA)"
+        super().__init__(**kwargs)
+        self._attr_device_info = get_or_create_device(
+            terminal.device_uuid, terminal.device_name, "Valve Actuator Air", ""
+        )
+        self._native_max_value = 100
+        self._native_min_value = 0
+        self._native_step = 1
+        self._attr_native_unit_of_measurement = PERCENTAGE
+        self._valve_serial = terminal.serial
+
+    @property
+    def native_value(self):
+        # The true Loxone control state is 0..10; show 0..100 in HA.
+        return valve_output_to_percent(self._state)
+
+    @property
+    def extra_state_attributes(self):
+        base = dict(super().extra_state_attributes)
+        base.update({
+            "control_mode": "loxone_visualized_virtual_input",
+            "loxone_range": "0–10",
+            "ha_range": "0–100%",
+            "air_serial": self._valve_serial,
+            "drive_to_disabled": True,
+        })
+        return base
+
+    async def async_set_native_value(self, value: float):
+        if (
+            isinstance(value, bool) or not isinstance(value, (int, float))
+            or not math.isfinite(value) or value != int(value)
+            or not 0 <= value <= 100
+        ):
+            raise HomeAssistantError("Otwarcie musi być od 0 do 100%")
+        # The original Loxone UI Slider UUID is the supported write target.
+        # Loxone then handles the physical actuator in its normal Air cycle.
+        self.hass.bus.async_fire(
+            SENDDOMAIN,
+            {"uuid": self.uuidAction, "value": f"{float(value) / 10:.1f}"},
+        )
+
