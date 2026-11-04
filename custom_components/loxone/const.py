@@ -61,6 +61,7 @@ CONF_SCENE_GEN = "generate_scenes"
 CONF_SCENE_GEN_DELAY = "generate_scenes_delay"
 CONF_LIGHTCONTROLLER_SUBCONTROLS_GEN = "generate_lightcontroller_subcontrols"
 CONF_VERIFY_SSL = "verify_ssl"
+CONF_AIR_VALVE_DISCOVERY = "enable_air_valve_discovery"
 DEFAULT_FORCE_UPDATE = False
 
 SUPPORT_SUN_AUTOMATION = 1024
