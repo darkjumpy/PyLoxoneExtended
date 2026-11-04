@@ -200,12 +200,14 @@ _TECH_FIELDS = {
 def parse_valve_tech_report(report: str) -> dict[str, int | bool | str]:
     """Parse reported valve status, not an inferred step-to-percent mapping.
 
-    TechReport is confirmed in Loxone Config. Fetching it over Miniserver
-    HTTP/WS is not yet verified. Do not assume a write-capable device API.
+    TechReport is confirmed over Miniserver HTTP to return an XML LL value.
+    That does not imply the device's shell accepts writes through this API.
     """
     found: dict[str, int | bool | str] = {}
-    for match in re.finditer(r"(?m)^\s*([^:\r\n]+):\s*([^;\r\n]+)", report):
-        name, raw = match.group(1).strip(), match.group(2).strip()
+    for token in re.split(r"[;\r\n]+", report):
+        if ":" not in token:
+            continue
+        name, raw = (part.strip() for part in token.split(":", 1))
         if name == "RefDriveState":
             if raw:
                 found["reference_state"] = raw
