@@ -8,6 +8,8 @@ from custom_components.loxone.valve_air import (
     battery_supply_from_attribute,
     linked_terminal_ids,
     _direct_target_input,
+    expected_valve_input_name,
+    valve_output_to_percent,
     _device_serial,
     _air_device_serial,
     parse_link_quality_report,
@@ -323,3 +325,56 @@ def test_motor_position_estimate_requires_idle_and_good_reference():
     idle["reference_state"] = "successful"
     idle["error_count"] = 1
     assert estimated_valve_opening(idle) is None
+
+
+
+def test_virtual_input_discovery_without_analog_attribute():
+    """Loxone Config omits the Analog flag in valid analog VirtualIn."""
+    from xml.etree import ElementTree as ET
+
+    name = "Siłownik Air WC góra"
+    serial = "504F94FFFEC51C12"
+    assert expected_valve_input_name(serial, name) == (
+        "HA Valve | 504F94FFFEC51C12 | Value"
+    )
+    root = ET.fromstring(
+        '<Loxone>'
+        '<C Type="VirtualIn" Title="HA Valve | 504F94FFFEC51C12 | Value" U="vi1"/>'
+        '</Loxone>'
+    )
+    assert _direct_target_input(root, name, serial) == "vi1"
+
+    # Fall back to prior b4 name-based convention.
+    old = ET.fromstring(
+        '<Loxone>'
+        '<C Type="VirtualIn" Title="HA Valve | Siłownik Air WC góra | Value" U="vi2"/>'
+        '</Loxone>'
+    )
+    assert _direct_target_input(old, name, serial) == "vi2"
+
+
+def test_virtual_input_rejects_digital_and_duplicates():
+    from xml.etree import ElementTree as ET
+
+    name = "Siłownik Air WC góra"
+    serial = "504F94FFFEC51C12"
+    expected = expected_valve_input_name(serial, name)
+    for marker in ['Analog="false"', 'Digital="true"', 'UseAsDigital="1"']:
+        root = ET.fromstring(
+            f'<Loxone><C Type="VirtualIn" Title="{expected}" U="vi" {marker}/></Loxone>'
+        )
+        assert _direct_target_input(root, name, serial) is None
+    duplicate = ET.fromstring(
+        f'<Loxone><C Type="VirtualIn" Title="{expected}" U="a"/>'
+        f'<C Type="VirtualIn" Title="{expected}" U="b"/></Loxone>'
+    )
+    assert _direct_target_input(duplicate, name, serial) is None
+
+
+def test_valve_setpoint_range_0_to_10_maps_to_0_to_100():
+    assert valve_output_to_percent(0) == 0
+    assert valve_output_to_percent(3) == 30
+    assert valve_output_to_percent(5.5) == 55
+    assert valve_output_to_percent(10) == 100
+    assert valve_output_to_percent(-0.1) is None
+    assert valve_output_to_percent(10.1) is None
