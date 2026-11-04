@@ -453,6 +453,22 @@ async def async_restart_valve(session: ClientSession, config_entry, serial: str)
         raise HomeAssistantError("Cannot send restart command to Loxone Air") from err
 
 
+def tech_report_confirms_awake(report: str | None, serial: str) -> bool:
+    """Require a fresh successful device report for the exact Air serial.
+
+    A matching TechReport is only a momentary readiness check, not a
+    general-purpose wake-up. Reports from other Air heads are rejected.
+    """
+    normalized = _device_serial(serial)
+    if normalized is None or not report:
+        return False
+    match = re.search(
+        r"(?:^|[;\r\n])\s*Serial\s*:\s*([0-9a-fA-F:-]+)",
+        report,
+    )
+    return match is not None and _device_serial(match.group(1)) == normalized
+
+
 def parse_drive_to_response(payload: bytes, serial: str, position: int) -> str:
     """Parse a write command without treating generic LL Code=200 as success.
 
@@ -534,10 +550,7 @@ async def async_drive_to(
                 "Wybudź ją lub wybierz 'Obudź urządzenie' w Loxone Config "
                 "i poczekaj na jej następny cykl. DriveTo NIE zostało wysłane."
             )
-        match = re.search(
-            r"(?:^|[;\r\n])\s*Serial\s*:\s*([0-9a-fA-F:-]+)", tech
-        )
-        if match is None or _device_serial(match.group(1)) != normalized:
+        if not tech_report_confirms_awake(tech, normalized):
             raise HomeAssistantError(
                 "Nie udało się potwierdzić tożsamości wybudzonej głowicy Air. "
                 "DriveTo nie zostało wysłane."
