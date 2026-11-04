@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import logging
-from datetime import timedelta
+from datetime import timedelta, datetime, timezone
 from time import monotonic
 from typing import Literal, final
 
@@ -29,7 +29,7 @@ from .helpers import (add_room_and_cat_to_value_values, get_all,
                       get_or_create_device)
 from .miniserver import get_miniserver_from_hass
 from .valve_air import (air_terminal_poll_interval, async_get_air_valves,
-                        async_read_terminal, linked_terminal_ids)
+                        async_read_terminal, linked_terminal_ids, serial_from_ha_valve_button)
 
 
 _LOGGER = logging.getLogger(__name__)
@@ -73,24 +73,52 @@ async def async_setup_entry(
     entities = []
     air_valves = await async_get_air_valves(hass, miniserver, config_entry)
     air_by_uuid = {terminal.uuid.lower(): terminal for terminal in air_valves}
+    air_button_by_serial = {
+        t.serial: t for t in air_valves
+        if t.serial and t.kind == "digital"
+        and t.name.casefold().strip() in ("wejście 1", "wejscie 1", "input 1")
+    }
     visualized = linked_terminal_ids(loxconfig)
-    # Do not advertise the old DriveTo delivery queue: Loxone now owns
-    # the native Air cycle after the analog Virtual Input changes.
+    mirrored_events: dict[str, set[str]] = {}
     for terminal in air_valves:
         get_or_create_device(
             terminal.device_uuid, terminal.device_name, "Valve Actuator Air", ""
         )
 
-    for sensor in get_all(loxconfig, "InfoOnlyDigital"):
-        sensor = add_room_and_cat_to_value_values(loxconfig, sensor)
+    for original in get_all(loxconfig, "InfoOnlyDigital"):
+        sensor = add_room_and_cat_to_value_values(loxconfig, original)
         sensor.update({"type": "digital"})
-        if air_terminal := air_by_uuid.get(sensor["uuidAction"].lower()):
-            sensor["parent_id"] = air_terminal.device_uuid
+        uid = str(sensor.get("uuidAction", ""))
+        physical = air_by_uuid.get(uid.lower())
+        if physical is None:
+            serial = serial_from_ha_valve_button(sensor.get("name"))
+            physical = air_button_by_serial.get(serial)
+        if physical and physical.kind == "digital":
+            aliases = mirrored_events.setdefault(physical.uuid.lower(), set())
+            aliases.add(uid)
+            states = sensor.get("states")
+            if isinstance(states, dict):
+                aliases.update(str(v) for v in states.values() if v)
+            # Use the existing physical Air entity for published input
+            # events rather than creating a separate HA device.
+            continue
         entities.append(LoxoneDigitalSensor(**sensor))
 
     for terminal in air_valves:
-        if terminal.kind == "digital" and terminal.uuid.lower() not in visualized:
-            entities.append(LoxonePhysicalAirValveBinarySensor(terminal, config_entry))
+        if terminal.kind != "digital":
+            continue
+        is_button = terminal.name.casefold().strip() in (
+            "wejście 1", "wejscie 1", "input 1"
+        )
+        if (
+            terminal.uuid.lower() not in visualized
+            or is_button
+            or terminal.uuid.lower() in mirrored_events
+        ):
+            entities.append(LoxonePhysicalAirValveBinarySensor(
+                terminal, config_entry,
+                event_uuids=mirrored_events.get(terminal.uuid.lower()),
+            ))
 
     for sensor in get_all(loxconfig, "PresenceDetector"):
         sensor = add_room_and_cat_to_value_values(loxconfig, sensor)
