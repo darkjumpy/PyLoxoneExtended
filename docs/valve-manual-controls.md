@@ -1,4 +1,15 @@
-# Valve Actuator Air — direct DriveTo control (2026.11.0b5 beta)
+# Valve Actuator Air — legacy experimental DriveTo notes
+
+> **Superseded on the current development branch:** The controller now uses
+> a named Loxone analog Virtual Input (range 0–10) connected to the head,
+> not device-shell DriveTo. No automatic creation of Loxone Config project
+> elements is attempted. For the active control procedure, read
+> [normal Virtual Input control](valve-virtual-input-control.md).
+>
+> The remainder of this document records the earlier b5/b6 experiment
+> for investigation and rollback only; it should not be treated as the
+> installation instructions for the new implementation.
+
 
 > **Experimental.** Tested through a real Loxone Miniserver Compact and
 > a battery-powered Valve Actuator Air. Not suitable as the only
