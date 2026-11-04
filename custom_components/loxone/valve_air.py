@@ -330,6 +330,39 @@ def estimated_valve_opening(values: dict) -> int | None:
     return max(0, min(100, int(100 * (limit - position) / limit + 0.5)))
 
 
+def _serial_from_visualization_title(name: str | None, ending: str) -> str | None:
+    """Find exactly one Air serial in an HA Valve visualization title.
+
+    Loxone Config may replace special separators (|) with escaped
+    underscores/backslashes in its visualization. Do not rely on exact
+    punctuation: require a strict HA Valve prefix, suffix and an exact
+    12/16-hex Air serial. Reject ambiguous titles.
+    """
+    if not isinstance(name, str):
+        return None
+    if not re.match(r"^\\s*HA\\s+Valve\\b", name, re.IGNORECASE):
+        return None
+    if not re.search(rf"\\b{re.escape(ending)}\\s*$", name, re.IGNORECASE):
+        return None
+    matches = re.findall(
+        r"(?<![0-9A-F])(?:[0-9A-F]{16}|[0-9A-F]{12}|(?:[0-9A-F]{2}:){7}[0-9A-F]{2})(?![0-9A-F])",
+        name, re.IGNORECASE,
+    )
+    if len(matches) != 1:
+        return None
+    return _device_serial(matches[0])
+
+
+def serial_from_ha_valve_slider(name: str | None) -> str | None:
+    """Match ordinary HA Valve UI sliders despite rewritten separators."""
+    return _serial_from_visualization_title(name, "Value")
+
+
+def serial_from_ha_valve_button(name: str | None) -> str | None:
+    """Match a visualized physical button mirrored as an info-only control."""
+    return _serial_from_visualization_title(name, "Button")
+
+
 def expected_valve_input_name(serial: str | None, device_name: str) -> str:
     """Stable operator-facing name for the per-head analog Virtual Input."""
     normalized = _device_serial(serial)
@@ -339,41 +372,45 @@ def expected_valve_input_name(serial: str | None, device_name: str) -> str:
 def _direct_target_input(
     root: ET.Element, device_name: str, serial: str | None = None,
 ) -> str | None:
-    """Find an explicitly named analog VirtualIn for one physical Air head.
+    """Discover one verified analog VirtualIn, tolerating escaped names.
 
-    Real Loxone program XML often omits the Analog attribute for VirtualIn;
-    absence is not proof of digital. Explicit digital flags ARE rejected.
-    Prefer the stable serial-based title; retain the older name-based title.
-    Reject duplicates and never guess by proximity or a fuzzy name match.
+    Prefer exact serial-based matches; Loxone sometimes rewrites the pipe
+    separators in the installed project. Do not mistake generic sliders
+    for physical device inputs, or accept duplicate candidate names.
     """
-    names = [expected_valve_input_name(serial, device_name).casefold()]
-    old_name = f"HA Valve | {device_name} | Value".casefold()
-    if old_name not in names:
-        names.append(old_name)
-    for name in names:
-        matches = []
-        for control in root.iter("C"):
-            if control.get("Type") != "VirtualIn":
-                continue
-            if (control.get("Title") or "").strip().casefold() != name:
-                continue
-            uuid = control.get("U")
-            if not uuid:
-                continue
-            if (control.get("Analog") or "").strip().lower() in ("false", "0"):
-                continue
-            if any(
-                (control.get(key) or "").strip().lower() in ("true", "1")
-                for key in ("Digital", "UseAsDigital", "IsDigital")
-            ):
-                continue
-            matches.append(uuid)
-        if len(matches) > 1:
-            _LOGGER.warning("Multiple HA Valve virtual inputs with the same name; skipping")
-            return None
-        if matches:
-            return matches[0]
-    return None
+    expected = expected_valve_input_name(serial, device_name).casefold()
+    legacy = f"HA Valve | {device_name} | Value".casefold()
+    serial = _device_serial(serial)
+    matches = []
+    for control in root.iter("C"):
+        if control.get("Type") != "VirtualIn":
+            continue
+        title = (control.get("Title") or "").strip()
+        if not title:
+            continue
+        title_serial = serial_from_ha_valve_slider(title)
+        if not (
+            (serial and title_serial == serial)
+            or title.casefold() in (expected, legacy)
+        ):
+            continue
+        uuid = control.get("U")
+        if not uuid:
+            continue
+        if (control.get("Analog") or "").strip().lower() in ("false", "0"):
+            continue
+        if any(
+            (control.get(key) or "").strip().lower() in ("true", "1")
+            for key in ("Digital", "UseAsDigital", "IsDigital")
+        ):
+            continue
+        matches.append(uuid)
+    if len(matches) > 1:
+        _LOGGER.warning(
+            "Multiple HA Valve analog Virtual Inputs match one valve; skipping %s",
+            device_name,
+        )
+    return matches[0] if len(matches) == 1 else None
 
 
 def _name_contains(name: str, words: tuple[str, ...]) -> bool:
