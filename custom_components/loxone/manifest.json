@@ -13,5 +13,5 @@
     "websockets>=14,<16",
     "pycryptodome>=3.20"
   ],
-  "version": "2026.11.0b1"
+  "version": "2026.11.0b2"
 }
