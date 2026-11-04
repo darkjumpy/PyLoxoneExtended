@@ -24,7 +24,10 @@ from homeassistant.helpers.aiohttp_client import async_get_clientsession
 from homeassistant.helpers.storage import Store
 
 from .air_command_queue_core import LatestValueQueue
-from .valve_air import _device_serial, _read_device_shell_report, tech_report_confirms_awake
+from .valve_air import (
+    _device_serial, _read_device_shell_report, parse_valve_tech_report,
+    tech_report_confirms_awake,
+)
 
 _LOGGER = logging.getLogger(__name__)
 POLL_WHILE_PENDING = 5  # seconds, probes MINISERVER, only with pending commands
@@ -101,7 +104,10 @@ class AirCommandQueue:
         if not serial or not parameter or self._stopped:
             raise ValueError("Invalid Air command sender")
         self._senders[(serial, parameter)] = sender
-        self._battery[serial] = battery_powered
+        # The project Battery attribute may be stale after connecting
+        # external 24 V power. The physical TechReport is authoritative.
+        # Start as unknown until the first report confirms supply mode.
+        self._battery.setdefault(serial, None)
         self._start_worker(serial)
 
     def subscribe(self, serial: str, parameter: str, callback: Callable[[], None]):
@@ -234,6 +240,20 @@ class AirCommandQueue:
                     serial, "TechReport", request_timeout=5
                 )
                 if report and tech_report_confirms_awake(report, serial):
+                    fields = parse_valve_tech_report(report)
+                    physical_battery = fields.get("battery_powered")
+                    if isinstance(physical_battery, bool):
+                        self._battery[serial] = physical_battery
+                    if self._battery[serial] is False:
+                        # Physical power is present: no natural wake wait.
+                        for item in available:
+                            fresh = self.pending.get(serial, item.parameter)
+                            if fresh and self._attempted_revision.get(
+                                (serial, item.parameter)
+                            ) != fresh.revision:
+                                await self._attempt(fresh, None)
+                        await self._wait(serial, POLL_WHILE_PENDING)
+                        continue
                     wake = wake_counter_from_tech_report(report)
                     if wake is not None:
                         prev = self._wake_seen.get(serial)
