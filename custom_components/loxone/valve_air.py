@@ -28,6 +28,12 @@ from time import monotonic
 from aiohttp import BasicAuth, ClientSession, ClientTimeout
 from homeassistant.const import CONF_HOST, CONF_PASSWORD, CONF_PORT, CONF_USERNAME
 from homeassistant.helpers.aiohttp_client import async_get_clientsession
+from .const import (
+    CONF_AIR_TERMINAL_POLL_INTERVAL,
+    DEFAULT_AIR_TERMINAL_POLL_INTERVAL,
+    MIN_AIR_TERMINAL_POLL_INTERVAL,
+    MAX_AIR_TERMINAL_POLL_INTERVAL,
+)
 
 _LOGGER = logging.getLogger(__name__)
 MAX_PROGRAM_SIZE = 16 * 1024 * 1024
@@ -177,6 +183,22 @@ def _air_device_serial(device: ET.Element) -> str | None:
         _LOGGER.warning("Air head serial/IP mismatch; refusing to send device commands")
         return None
     return direct or derived
+
+
+def air_terminal_poll_interval(options: dict) -> int:
+    """Return a validated effective Air I/O polling interval in seconds."""
+    raw = options.get(
+        CONF_AIR_TERMINAL_POLL_INTERVAL, DEFAULT_AIR_TERMINAL_POLL_INTERVAL
+    )
+    try:
+        interval = int(raw)
+        if float(raw) != interval:
+            raise ValueError("fractional interval")
+    except (ValueError, TypeError, OverflowError):
+        return DEFAULT_AIR_TERMINAL_POLL_INTERVAL
+    if not MIN_AIR_TERMINAL_POLL_INTERVAL <= interval <= MAX_AIR_TERMINAL_POLL_INTERVAL:
+        return DEFAULT_AIR_TERMINAL_POLL_INTERVAL
+    return interval
 
 
 def valve_output_to_percent(raw: float | None) -> int | None:
