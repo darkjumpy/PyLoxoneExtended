@@ -1,154 +1,127 @@
-# Valve Actuator Air — direct setpoint and link diagnostics (experimental)
+# Valve Actuator Air — direct DriveTo control (2026.11.0b5 beta)
 
-## Why just one Loxone Virtual Input?
+> **Experimental.** Tested through a real Loxone Miniserver Compact and
+> a battery-powered Valve Actuator Air. Not suitable as the only
+> heating/frost protection control without a separately proven fallback.
 
-This integration controls **unregulated Air valve heads** that are paired
-with the Miniserver but not connected to an Intelligent Room Controller.
-The Loxone Miniserver's physical Air actor output is not an authenticated
-writeable HA/visualisation control. Create **one analog Virtual Input** for
-each actuator, and wire it directly to the physical Air valve output in
-Loxone Config.
+## What changed in b5
 
-Example for a device whose physical \`Title\` is \`Siłownik Air Salon\`:
+PyLoxone Extended automatically discovers physical Valve Actuator Air
+devices from the installed Loxone program and exposes a Home Assistant
+`number` entity named **Bezpośrednie otwarcie** for heads with a valid
+Air serial number. No new Loxone Config Virtual Input is required.
 
-| Virtual Input (exact Title) | Type | Value |
-| --- | --- | --- |
-| \`HA Valve | Siłownik Air Salon | Value\` | Analog | 0–10 |
+Changing the slider to an integer 0–100 sends one device-shell command
+to the specific physical head:
 
-Connect the Virtual Input's analog output to the \`Valve Actuator Air\`
-analog actor in Loxone Config. Do not add a second manual/auto input;
-none is required in this unregulated setup.
+```text
+GET /dev/sys/wsdevice/<HEAD_SERIAL>/DriveTo/<PERCENT>
+```
 
-\`\`\`text
-Home Assistant number (0–100%)
-       |
-       v  (value divided by 10)
-HA Valve | Siłownik Air Salon | Value (0–10)
-       |
-       v
-Loxone physical Air actuator analog output
-\`\`\`
+On the test head, manual commands `DriveTo/1`, `DriveTo/100`, and
+`DriveTo/0` produced actuator movement consistent with 1%, 100%, and
+0% commands. The final settled motor position after each command was
+not yet independently verified. Intermediate percentages and long-term
+persistence also need hardware testing.
 
-Once the program is saved to the Miniserver, restart or reload the
-PyLoxone Extended integration.
+The entity's state represents the **last acknowledged request sent by
+Home Assistant during the current session**, not the measured or
+independently verified opening of the valve. Its state is unknown
+until an acknowledged command is sent. This is deliberate.
 
-When the exactly named Virtual Input is found, a \`number.Otwarcie zadane\`
-entity appears under the physical actuator in Home Assistant.
-The 0–100% input sends 0–10 to that Virtual Input.
+## Air battery sleep — critical limitation
 
-The read-only \`Wysterowanie zaworu\` sensor reports the command visible
-on the physical actor, which is not necessarily the measured motor
-position. In battery mode a new position can take until the next Air
-communication cycle to be applied.
+Battery-powered Air heads sleep between communication windows.
+Loxone may respond to an HTTP request with `<LL Code="200"
+value="timeout"/>`. This is **not** a successful movement.
 
-This **does not** keep rooms above a minimum temperature or provide
-frost protection. For unattended operation, connect a suitable protection
-strategy / fallback in Loxone Config.
+Before sending `DriveTo` to a head paired in battery mode or whose
+power mode is unknown, b5 sends `TechReport` and checks that a valid
+response contains the **same physical serial**. If that check fails,
+it blocks `DriveTo`. The check is a *best-effort contact check*:
+Miniserver may serve diagnostic information when a head is sleeping,
+so a successful `TechReport` **does not prove the head is awake**.
+A following `DriveTo` may still time out.
 
-## RSSI and Link Quality
+**b5 does not automatically wake up heads.** No verified HTTP equivalent
+for Loxone Config's `Keep device awake` action is known. On battery
+heads, choose that action in Loxone Config and wait for the next Air
+communication cycle, or use the physical wake button. After the device
+is awake, try the slider. No blind retries are performed on a timeout,
+because it is not known whether the actuator will still process the
+command.
 
-Loxone Config's Air Diagnostics can report RSSI in dB. This branch
-creates an RSSI or Link Quality diagnostic sensor only when Loxone's
-downloaded project contains a corresponding readable analog Air terminal
-(RSSI / Link Quality / LQI). It never guesses 100% from online state,
-and it does not invent a source for internal Air Diagnostics.
+The slider rate-limits attempts to at least 15 seconds apart and
+accepts only whole numbers in the range 0–100.
 
-**Limitation:** Real Miniserver Compact firmware may not expose RSSI
-as an analog terminal. In this case, no signal-quality entity appears
-until the private diagnostics interface is investigated and confirmed.
-To verify RSSI manually, use Loxone Config > Air Diagnostics.
+## How replies are handled
 
-## Real device TechReport and Link Quality
+- HTTP 200 with LL `Code="200"`, matching `control`, and
+  `value="ok"`: the device has acknowledged the command. This
+  **does not** verify the final motor position.
+- `value="timeout"`: unconfirmed; Home Assistant shows an error and
+  does **not** automatically resend.
+- Invalid command, mismatched device, malformed XML, or HTTP error:
+  no successful update is shown.
 
-The physical Miniserver has been confirmed to accept this **read-only**
-service command via HTTP Basic Authentication:
+## Diagnostics
 
-\`\`\`
-GET /dev/sys/wsdevice/<16-hex-digit-Air-serial>/TechReport
-\`\`\`
+Each discovered head also exposes diagnostic sensors derived from
+`TechReport` where values are available, including:
 
-The returned XML contains \`<LL value="Serial:...;RequestedPercent:...;" Code="200"/>\`.
-The integration parses these semicolon-separated fields and exposes
-\`Zadane otwarcie\`, \`Otwarcie docelowe\`,
-\`Stan kalibracji\`, \`Błędy napędu\`, and
-\`Tryb zasilania\` as diagnostic sensors under the physical actuator.
+- **Zadane otwarcie** (`RequestedPercent`)
+- **Otwarcie docelowe** (`DestinationPercent`)
+- **Stan kalibracji** (`RefDriveState`)
+- **Błędy napędu** (`Error[#]`)
+- **Tryb zasilania** (`BatteryPowered`)
 
-For link quality the integration *also attempts* the read-only command:
+**Important:** `RequestedPercent` and `DestinationPercent` may remain
+at 0 even while `DriveTo` moves the motor. They belong to the
+ordinary control path and must not be used as verification of direct
+shell movement. Values of `Pos`, `StartPos`, and `MaxPos` are raw
+motor data; do not automatically convert them to percentages.
 
-\`\`\`
-GET /dev/sys/wsdevice/<16-hex-digit-Air-serial>/GetLinkQuality
-\`\`\`
+The integration also attempts
+`/dev/sys/wsdevice/<serial>/GetLinkQuality`. Its HTTP availability
+has **not been verified** on the tested Miniserver. If the command does
+not return usable data for the particular head, the RSSI/LQI entities
+are unavailable. Data labeled for the Air Base must not be treated as
+measurements of an individual valve.
 
-**The HTTP form of GetLinkQuality has not yet been confirmed on the user's
-Miniserver**, even though it is available in Loxone Config's device shell.
-If no valid XML response or no data for this exact device is returned,
-signal-quality sensors show unavailable. Results whose \`Target\` does
-not match the actuator serial are discarded, to avoid assigning Air Base
-quality to the valve.
+Diagnostic polls are cached per head: 180 seconds for externally
+powered/unknown heads, 900 seconds for paired battery heads.
 
-Poll results are shared across all sensor entities for each valve:
-180 seconds for an external/unknown supply mode, and 900 seconds for
-heads paired in battery mode. Commands are never sent to drive the motor
-on a timer.
+## Restart and safety
 
-For externally-powered heads, \`Batt[%]:127\` is an invalid sentinel,
-not 127% battery. The actual valve opening is **not** inferred from
-raw motor steps \`Pos\`, \`StartPos\`, or \`MaxPos\`: use the reported
-\`RequestedPercent\` and \`DestinationPercent\` as distinct targets.
+The separately exposed **Uruchom ponownie głowicę** button uses
+`Reboot`; **it is not a dedicated recalibration command**. The
+`ForceRefDrive` shell command has not been validated for remote use.
 
-Eight-byte serials (16 hex digits) are supported.
+Keep the existing reliable room control and heating protection
+strategy while testing b5. Do not connect two competing Loxone/HA
+controllers to the same actuator without deciding who owns the valve.
+The new direct control is experimental; a sleeping or disconnected
+head may fail to accept a position request.
 
-The \`DriveTo\` device shell command is visible in the real device's
-\`call\` list, but its argument schema, units, and remote invocation
-semantics are **unverified**. Do not send guessed percentages or
-raw step counts to this service command.
+All device commands use Miniserver credentials saved in the
+integration. Plain HTTP Basic Authentication exposes credentials on
+the LAN; restrict access to a trusted network and prefer HTTPS when
+supported. Do not expose these device-shell URLs to the internet.
 
-## Air battery sleep / DriveTo readiness gate
+## Installation / rollback
 
-The direct DriveTo slider uses this flow when the paired head is battery
-powered or the supply mode is not known:
+Install the b5 **pre-release** in HACS from the fork
+`darkjumpy/PyLoxoneExtended`, then reload the Loxone integration
+or restart Home Assistant. The b5 tag must include the
+`manifest.json` version `2026.11.0b5`.
 
-1. Send a *read-only* \`TechReport\` to that head's verified Air serial.
-2. If Miniserver returns an LL \`Code=200\` XML report with matching serial,
-   immediately send \`DriveTo/<integer percent>\`.
-3. If the device sleeps, returns timeout, or the serial cannot be confirmed,
-   do **not** send a speculative DriveTo and show a clear error in HA.
-4. After \`DriveTo\`, only LL \`value=ok\` counts as acknowledgement;
-   \`value=timeout\` is **not** success and is never blindly retried.
-   Even an \`ok\` response is *not* proof of the final motor position.
+For rollback, install the earlier `2026.11.0b4` tag or restore your
+previous custom integration files and restart HA. The b4 feature used
+a dedicated Virtual Input and does **not** contain direct DriveTo
+control.
 
-**A diagnostic probe cannot itself wake a sleeping battery head.** Official
-Loxone guidance: "Keep device awake" in Loxone Config makes a battery Air
-device remain active for five minutes **after its next natural wake-up**;
-pressing its button can wake it earlier. No verified HTTP API endpoint is
-currently known to arm this function, so the integration does not make up a
-wakeup command or claim that sending a TechReport wakes the head.
+## Related docs
 
-The guard prevents avoidable failures, but does not implement automatic
-wake-up or reliable background delivery. If unattended positioning is
-required, this remains a limitation of the experimental direct-device-shell
-approach. Powered heads do not require this preflight.
-
-## Restart vs calibration
-
-A button named **Uruchom ponownie głowicę** is offered if the project
-contains a valid device serial. It invokes the documented
-\`/dev/sys/wsdevice/<serial>/Reboot\` endpoint, which requires an account
-with enough privileges. Restart is **not** an explicit recalibration API
-command; Gen1 may recalibrate on restart, other generations need
-verification. The button **Rekalibruj urządzenie** is intentionally
-not added without an independently verified calibration endpoint.
-
-## Diagnostics & safety
-
-- The link/temperature/position values are read-only and polled.
-- Position commands require a purpose-made analog Loxone Virtual Input.
-- Audio functionality and previous entity identifiers are preserved.
-- Program fetching uses stored Miniserver HTTP authentication; on
-  non-TLS connections credentials can be visible on the LAN.
-- This is an experimental branch pending real Compact hardware tests.
-- Do not post exported programs, passwords, Air serials or tokens publicly.
-
-Sources:
-- https://www.loxone.com/plpl/kb/air/
-- https://www.loxone.com/plpl/kb/web-services/
+- [Physical Air valve discovery](valve-actuator-air.md)
+- [Loxone Air documentation](https://www.loxone.com/plpl/kb/air/)
+- [Loxone web services](https://www.loxone.com/plpl/kb/web-services/)
