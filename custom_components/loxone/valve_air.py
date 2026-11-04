@@ -149,6 +149,36 @@ def battery_supply_from_attribute(value: str | None) -> bool | None:
     return None
 
 
+def _air_device_serial(device: ET.Element) -> str | None:
+    """Resolve an Air head's serial from Loxone's Serial or IPv6 EUI-64 IP.
+
+    Real Loxone project Air devices often have no Serial attribute. Instead
+    they store an uncompressed IPv6 address in IP, e.g.
+    FE80000000000000524F94FFFEC51C12 maps to 504F94FFFEC51C12.
+    IPv6 flips the universal/local bit (0x02) in the first IID octet.
+    Reject malformed, non-link-local, non-EUI-64 and conflicting values.
+    """
+    from ipaddress import IPv6Address, AddressValueError
+
+    direct = _device_serial(device.get("Serial"))
+    raw = (device.get("IP") or "").strip()
+    derived = None
+    if raw:
+        try:
+            ip = IPv6Address(int(raw, 16)) if re.fullmatch(r"[0-9a-fA-F]{32}", raw) else IPv6Address(raw)
+        except (AddressValueError, ValueError):
+            pass
+        else:
+            iid = ip.packed[8:]
+            if ip.is_link_local and iid[3:5] == b"\xFF\xFE":
+                derived = f"{iid[0] ^ 0x02:02X}" + iid[1:].hex().upper()
+                derived = _device_serial(derived)
+    if direct and derived and direct != derived:
+        _LOGGER.warning("Air head serial/IP mismatch; refusing to send device commands")
+        return None
+    return direct or derived
+
+
 def _device_serial(value: str | None) -> str | None:
     """Normalise verified 6-byte or 8-byte hex Air identifiers for Loxone APIs."""
     if not value:
@@ -298,7 +328,7 @@ def extract_air_valves(xml: bytes) -> list[AirValveTerminal]:
         if not uuid:
             continue
         battery_powered = battery_supply_from_attribute(device.get("Battery"))
-        serial = _device_serial(device.get("Serial"))
+        serial = _air_device_serial(device)
         manual_value_uuid = _direct_target_input(root, title)
         children = list(device.iter("C"))[1:]
         analog_outputs = [el for el in children if el.get("Type") == "LoxAIRAactor"]
