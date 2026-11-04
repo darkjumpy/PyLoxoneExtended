@@ -151,8 +151,16 @@ class LoxonePhysicalAirValveBinarySensor(BinarySensorEntity):
     # configured limit. Schedule our own periodic refresh while loaded.
     _attr_should_poll = False
 
-    def __init__(self, terminal, config_entry):
+    def __init__(self, terminal, config_entry, event_uuids=None):
         self._terminal = terminal
+        self._event_uuids = {terminal.uuid}
+        if event_uuids:
+            self._event_uuids.update(event_uuids)
+        self._is_button = terminal.name.casefold().strip() in (
+            "wejście 1", "wejscie 1", "input 1"
+        )
+        self._press_count = 0
+        self._last_press = None
         self._config_entry = config_entry
         self._poll_interval = air_terminal_poll_interval(config_entry.options)
         self._last_poll = 0.0
@@ -172,7 +180,10 @@ class LoxonePhysicalAirValveBinarySensor(BinarySensorEntity):
         self._attr_extra_state_attributes = {
             "loxone_physical_terminal": terminal.uuid,
             "fallback_poll_interval_seconds": self._poll_interval,
-            "updates": "Loxone events when available, HTTP fallback",
+            "updates": "visualized Loxone events when available, HTTP fallback",
+            "event_uuids": sorted(self._event_uuids),
+            "last_press": None,
+            "press_count_since_reload": 0,
         }
 
     async def async_added_to_hass(self):
@@ -190,7 +201,15 @@ class LoxonePhysicalAirValveBinarySensor(BinarySensorEntity):
         self.async_schedule_update_ha_state(force_refresh=True)
 
     def _on_event(self, event):
-        raw = event.data.get(self._terminal.uuid)
+        # Published LoxAPP3 state UUID can differ from the physical
+        # terminal UUID. Accept only verified aliases for this head.
+        raw = None
+        for key in self._event_uuids:
+            raw = event.data.get(key)
+            if raw is None:
+                raw = event.data.get(key.lower())
+            if raw is not None:
+                break
         if raw is None:
             return
         try:
@@ -199,9 +218,22 @@ class LoxonePhysicalAirValveBinarySensor(BinarySensorEntity):
             return
         if value not in (0.0, 1.0):
             return
-        self._attr_is_on = value == 1.0
+        pressed = value == 1.0
+        if pressed and self._is_button and self._attr_is_on is not True:
+            self._press_count += 1
+            self._last_press = datetime.now(timezone.utc).isoformat()
+            self._attr_extra_state_attributes["last_press"] = self._last_press
+            self._attr_extra_state_attributes["press_count_since_reload"] = self._press_count
+            self.hass.bus.async_fire(
+                "loxone_air_button_pressed",
+                {
+                    "air_serial": self._terminal.serial,
+                    "device_uuid": self._terminal.device_uuid,
+                    "terminal_uuid": self._terminal.uuid,
+                },
+            )
+        self._attr_is_on = pressed
         self._attr_available = True
-        # Avoid immediately making a redundant HTTP request.
         self._last_poll = monotonic()
         self.async_write_ha_state()
 
