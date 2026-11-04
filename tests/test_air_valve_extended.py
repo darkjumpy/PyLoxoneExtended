@@ -90,7 +90,7 @@ def test_direct_target_requires_exact_one_analog_virtual_input():
     assert other.manual_value_uuid is None
     assert _direct_target_input(ET.fromstring(PROGRAM), "unknown") is None
     assert _device_serial("50:4F:94:AA:BB:CC") == "504F94AABBCC"
-    assert _device_serial("50:4F:94:FF:FE:D1:7B:CE") == "504F94FFFED17BCE"
+    assert _device_serial("01:23:45:67:89:AB:CD:EF") == "0123456789ABCDEF"
     assert _device_serial("../Reboot") is None
     assert _device_serial("oops") is None
 
@@ -108,7 +108,7 @@ def test_rssi_and_link_quality_are_measurements_only_when_present():
 
 
 def test_parses_actual_link_quality_report():
-    report = """Target: 50:4f:94:ff:fe:d1:7b:ce;
+    report = """Target: 01:23:45:67:89:ab:cd:ef;
 MinRssiRx: -84;
 MaxRssiRx: -82;
 AvgRssiRx: -83;
