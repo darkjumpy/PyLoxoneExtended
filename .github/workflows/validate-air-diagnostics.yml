@@ -8,6 +8,8 @@ on:
       - custom_components/loxone/valve_air.py
       - custom_components/loxone/sensor.py
       - custom_components/loxone/number.py
+      - custom_components/loxone/config_flow.py
+      - custom_components/loxone/const.py
       - custom_components/loxone/binary_sensor.py
       - custom_components/loxone/air_command_queue.py
       - custom_components/loxone/air_command_queue_core.py
@@ -44,6 +46,8 @@ jobs:
               "parse_device_report_response",
               "parse_drive_to_response",
               "parse_valve_tech_report",
+              "estimated_valve_opening",
+              "air_terminal_poll_interval",
               "parse_link_quality_report",
           }
           constants = {"_TECH_FIELDS", "_LINK_FIELDS"}
@@ -55,8 +59,14 @@ jobs:
                   isinstance(t, ast.Name) and t.id in constants for t in node.targets
               ):
                   nodes.append(node)
-          assert len(nodes) == 9, [getattr(n, "name", "?") for n in nodes]
-          namespace = {"re": re, "ET": ET}
+          assert len(nodes) == 11, [getattr(n, "name", "?") for n in nodes]
+          namespace = {
+              "re": re, "ET": ET,
+              "CONF_AIR_TERMINAL_POLL_INTERVAL": "air_terminal_poll_interval",
+              "DEFAULT_AIR_TERMINAL_POLL_INTERVAL": 120,
+              "MIN_AIR_TERMINAL_POLL_INTERVAL": 5,
+              "MAX_AIR_TERMINAL_POLL_INTERVAL": 600,
+          }
           exec(compile(ast.Module(body=nodes, type_ignores=[]), str(path), "exec"), namespace)
           payload = (b'<LL Code="200" value="Serial:0123456789ABCDEF;Pos:2364;'
                      b'RequestedPercent:0;DestinationPercent:0;BatteryPowered:0;'
@@ -70,6 +80,18 @@ jobs:
           assert values["battery_powered"] is False, values
           assert "battery_level" not in values, values
           assert namespace["parse_valve_tech_report"]("WkupCnt[]:18;")["wake_count"] == 18
+          assert namespace["air_terminal_poll_interval"]({}) == 120
+          assert namespace["air_terminal_poll_interval"]({"air_terminal_poll_interval": 5}) == 5
+          assert namespace["air_terminal_poll_interval"]({"air_terminal_poll_interval": 7.5}) == 120
+          position_fn = namespace["estimated_valve_opening"]
+          stable = {"motor_steps": 0, "max_steps": 2227, "valve_busy": False,
+                    "drive_busy": False, "reference_state": "successful",
+                    "error_count": 0}
+          assert position_fn(stable) == 100
+          stable["motor_steps"] = 1114
+          assert position_fn(stable) == 50
+          stable["valve_busy"] = True
+          assert position_fn(stable) is None
           assert namespace["parse_device_report_response"](b'<LL Code="401" value="x"/>') is None
           assert namespace["_device_serial"]("01:23:45:67:89:AB:CD:EF") == "0123456789ABCDEF"
           air_device_serial = namespace["_air_device_serial"]
