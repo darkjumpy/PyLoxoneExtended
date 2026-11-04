@@ -59,7 +59,7 @@ When the Air head is paired for battery power (or mode is unknown):
 
 1. The integration stores the newest target in Home Assistant storage.
 2. Only while a command is pending, it probes the Miniserver's
-   `TechReport` endpoint approximately every **10 seconds**.
+   `TechReport` endpoint approximately every **5 seconds** (with a 5-second HTTP timeout).
 3. It checks that the returned report belongs to the correct Air serial
    and reads `WkupCnt[]`, a counter reported by the head.
 4. The first successful report from the correct head is treated as
@@ -73,7 +73,7 @@ When the Air head is paired for battery power (or mode is unknown):
 
 The real head reported `WkupCnt[]`, but **we have not yet proven that
 every natural five-minute polling cycle increments it**, or that a
-10-second report probe will catch the short wake window. Therefore,
+5-second report probe will catch the short wake window. Therefore,
 the queue and sensor logic can be tested now, but unattended
 delivery is not yet guaranteed. If `WkupCnt[]` does not change after
 the initial candidate wake, a timed-out command stays pending.
