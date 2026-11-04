@@ -27,7 +27,7 @@ from .air_command_queue_core import LatestValueQueue
 from .valve_air import _device_serial, _read_device_shell_report, tech_report_confirms_awake
 
 _LOGGER = logging.getLogger(__name__)
-POLL_WHILE_PENDING = 10  # seconds, probes MINISERVER, only with pending commands
+POLL_WHILE_PENDING = 5  # seconds, probes MINISERVER, only with pending commands
 MAX_PENDING_AGE = 3600   # expire stale heating requests after 1 h
 Key = tuple[str, str]
 Sender = Callable[[float], Awaitable[None]]
@@ -231,7 +231,7 @@ class AirCommandQueue:
                 # before transmitting to a battery head.
                 report = await _read_device_shell_report(
                     async_get_clientsession(self.hass), self.config_entry,
-                    serial, "TechReport"
+                    serial, "TechReport", request_timeout=5
                 )
                 if report and tech_report_confirms_awake(report, serial):
                     wake = wake_counter_from_tech_report(report)
