@@ -19,7 +19,8 @@ from .const import SENDDOMAIN
 from .helpers import (add_room_and_cat_to_value_values, clean_unit, get_all,
                       get_or_create_device)
 from .miniserver import get_miniserver_from_hass
-from .valve_air import async_get_air_valves, async_drive_to
+from .valve_air import (async_get_air_valves, async_drive_to,
+                        async_get_valve_diagnostics)
 from .air_command_queue import async_get_air_command_queue
 from homeassistant.helpers.aiohttp_client import async_get_clientsession
 
@@ -65,7 +66,9 @@ async def async_setup_entry(
         queue.register_sender(
             serial, "valve_position", deliver, battery_powered=battery_powered
         )
-        entities.append(LoxoneAirValveDirectPositionNumber(terminal, queue))
+        entities.append(LoxoneAirValveDirectPositionNumber(
+            terminal, queue, miniserver, config_entry,
+        ))
 
     for number_entity in get_all(loxconfig, ["Slider", "ValueSelector"]):
         number_entity = add_room_and_cat_to_value_values(loxconfig, number_entity)
@@ -90,32 +93,75 @@ class LoxoneAirValveDirectPositionNumber(NumberEntity):
     _attr_icon = "mdi:valve"
     _attr_assumed_state = True
 
-    def __init__(self, terminal, queue):
+    def __init__(self, terminal, queue, miniserver, config_entry):
         self._attr_unique_id = f"{terminal.device_uuid}_air_direct_drive_to"
         self._attr_device_info = get_or_create_device(
             terminal.device_uuid, terminal.device_name, "Valve Actuator Air", ""
         )
         self._serial = terminal.serial
         self._queue = queue
+        self._miniserver = miniserver
+        self._config_entry = config_entry
+        self._pairing_battery = terminal.battery_powered
+        self._initial_source = "unknown"
         self._parameter = "valve_position"
         pending = queue.get_pending(self._serial, self._parameter)
         self._attr_native_value = (
             pending.value if pending is not None
             else queue.last_ack(self._serial, self._parameter)
         )
+        if pending is not None:
+            self._initial_source = "queued_target"
+        elif self._attr_native_value is not None:
+            self._initial_source = "last_acknowledged_request"
 
     async def async_added_to_hass(self):
         await super().async_added_to_hass()
         self.async_on_remove(self._queue.subscribe(
             self._serial, self._parameter, self._refresh_from_queue
         ))
+        if self._attr_native_value is None:
+            self.async_schedule_update_ha_state(force_refresh=True)
+
+    async def async_update(self):
+        """Initialize the slider from estimated settled motor position.
+
+        This is read-only, and only when there is no known HA command.
+        The ordinary Loxone actor output is often fixed at 0 despite
+        DriveTo motor movements, so never treat that 0 as a position.
+        """
+        if (
+            self._queue.get_pending(self._serial, self._parameter) is not None
+            or self._queue.last_ack(self._serial, self._parameter) is not None
+            or self._attr_native_value is not None
+        ):
+            return
+        values = await async_get_valve_diagnostics(
+            self.hass, self._miniserver, self._config_entry,
+            self._serial, self._pairing_battery,
+        )
+        estimate = values.get("estimated_opening")
+        if (
+            estimate is not None
+            and self._queue.get_pending(self._serial, self._parameter) is None
+            and self._queue.last_ack(self._serial, self._parameter) is None
+            and self._attr_native_value is None
+        ):
+            self._attr_native_value = float(estimate)
+            self._initial_source = "estimated_idle_motor_position"
 
     def _refresh_from_queue(self):
         pending = self._queue.get_pending(self._serial, self._parameter)
-        self._attr_native_value = (
-            pending.value if pending is not None
-            else self._queue.last_ack(self._serial, self._parameter)
-        )
+        if pending is not None:
+            self._attr_native_value = pending.value
+            self._initial_source = "queued_target"
+        elif self._queue.last_ack(self._serial, self._parameter) is not None:
+            self._attr_native_value = self._queue.last_ack(
+                self._serial, self._parameter
+            )
+            self._initial_source = "last_acknowledged_request"
+        # If queue just expired and there is no acknowledgement, retain
+        # the last requested setpoint as assumed rather than forcing zero.
         self.async_write_ha_state()
 
     @property
@@ -129,7 +175,8 @@ class LoxoneAirValveDirectPositionNumber(NumberEntity):
                 self._serial, self._parameter
             ),
             "last_error": self._queue.last_error(self._serial, self._parameter),
-            "value_meaning": "requested position; not measured opening",
+            "value_meaning": "assumed target or initial estimated idle position; not confirmed opening",
+            "value_source": self._initial_source,
             "wake_detection": "TechReport WkupCnt[] change (experimental)",
         }
 
