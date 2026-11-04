@@ -10,6 +10,7 @@ from custom_components.loxone.valve_air import (
     _direct_target_input,
     _device_serial,
     parse_link_quality_report,
+    parse_valve_tech_report,
 )
 
 PROGRAM = b"""<?xml version="1.0"?>
@@ -131,3 +132,38 @@ ErrorRate %: 0; Errors: 0;
         "error_rate": 0.0,
     }
     assert parse_link_quality_report("LL Code 200 - command accepted") == {}
+
+
+def test_tech_report_uses_real_reported_percent_and_ignores_battery_sentinel():
+    report = """Serial:0123456789ABCDEF
+Pos:2364
+StartPos:150
+MaxPos:2364
+RequestedPos:2364
+RequestedPercent:0
+DestinationPercent:0
+ValveBusy:0
+DrvBusy:0
+BatteryPowered:0
+RefDriveState:successful
+Error[#]:0
+Batt[%]:127
+"""
+    assert parse_valve_tech_report(report) == {
+        "motor_steps": 2364,
+        "start_steps": 150,
+        "max_steps": 2364,
+        "requested_percent": 0,
+        "destination_percent": 0,
+        "valve_busy": False,
+        "drive_busy": False,
+        "battery_powered": False,
+        "reference_state": "successful",
+        "error_count": 0,
+    }
+    assert parse_valve_tech_report("RequestedPercent:61\nDestinationPercent:61\nBatteryPowered:1") == {
+        "requested_percent": 61,
+        "destination_percent": 61,
+        "battery_powered": True,
+    }
+    assert parse_valve_tech_report("RequestedPercent:999\nBatteryPowered:4") == {}
