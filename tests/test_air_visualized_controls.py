@@ -6,6 +6,7 @@ Do not import Home Assistant; compile only the pure XML/title helpers.
 from __future__ import annotations
 
 import ast
+from datetime import datetime, timezone
 import re
 import sys
 import types
@@ -88,6 +89,49 @@ class AirVisualizedControlTests(unittest.TestCase):
             f'<Loxone><C Type="VirtualIn" Title="{title}" U="one" Digital="true"/></Loxone>'
         )
         self.assertIsNone(discover(root, "WC", serial))
+
+    def test_button_alias_updates_immediately_and_emits_one_event_per_press(self):
+        path = Path(__file__).resolve().parents[1] / "custom_components/loxone/binary_sensor.py"
+        source = ast.parse(path.read_text(encoding="utf-8"))
+        klass = next(
+            n for n in source.body
+            if isinstance(n, ast.ClassDef)
+            and n.name == "LoxonePhysicalAirValveBinarySensor"
+        )
+        method = next(n for n in klass.body if isinstance(n, ast.FunctionDef) and n.name == "_on_event")
+        env = {"datetime": datetime, "timezone": timezone, "monotonic": lambda: 111.0}
+        exec(compile(ast.Module(body=[method], type_ignores=[]), str(path), "exec"), env)
+        callback = env["_on_event"]
+
+        events, writes = [], []
+        self_obj = types.SimpleNamespace(
+            _event_uuids={"physical", "mirrored-event-uuid"},
+            _terminal=types.SimpleNamespace(serial="504F94FFFEC51C12", device_uuid="device", uuid="physical"),
+            _attr_is_on=False,
+            _attr_available=False,
+            _attr_extra_state_attributes={},
+            _is_button=True,
+            _press_count=0,
+            _last_press=None,
+            _last_poll=0,
+            hass=types.SimpleNamespace(bus=types.SimpleNamespace(
+                async_fire=lambda name, data: events.append((name, data))
+            )),
+            async_write_ha_state=lambda: writes.append(True),
+        )
+        callback(self_obj, types.SimpleNamespace(data={"mirrored-event-uuid": 1.0}))
+        self.assertTrue(self_obj._attr_is_on)
+        self.assertEqual(self_obj._press_count, 1)
+        self.assertIn("last_press", self_obj._attr_extra_state_attributes)
+        self.assertEqual(events[0][0], "loxone_air_button_pressed")
+        self.assertEqual(events[0][1]["air_serial"], "504F94FFFEC51C12")
+        # Duplicate on-state does not emit another press.
+        callback(self_obj, types.SimpleNamespace(data={"mirrored-event-uuid": 1.0}))
+        self.assertEqual(len(events), 1)
+        callback(self_obj, types.SimpleNamespace(data={"mirrored-event-uuid": 0.0}))
+        callback(self_obj, types.SimpleNamespace(data={"mirrored-event-uuid": 1.0}))
+        self.assertEqual(len(events), 2)
+        self.assertEqual(len(writes), 4)
 
     def test_only_one_valve_slider_implementation_is_active(self):
         root = Path(__file__).resolve().parents[1] / "custom_components/loxone"
