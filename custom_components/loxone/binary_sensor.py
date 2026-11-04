@@ -24,12 +24,13 @@ from homeassistant.helpers.event import async_track_time_interval
 from homeassistant.helpers.typing import ConfigType, DiscoveryInfoType
 
 from . import LoxoneEntity
-from .const import CONF_ACTIONID, DOMAIN, EVENT, SENDDOMAIN
+from .const import CONF_ACTIONID, CONF_AIR_BUTTON_EVENT_MAP, DOMAIN, EVENT, SENDDOMAIN
 from .helpers import (add_room_and_cat_to_value_values, get_all,
                       get_or_create_device)
 from .miniserver import get_miniserver_from_hass
 from .valve_air import (air_terminal_poll_interval, async_get_air_valves,
-                        async_read_terminal, linked_terminal_ids, serial_from_ha_valve_button)
+                        async_read_terminal, linked_terminal_ids, serial_from_ha_valve_button,
+                        parse_air_button_event_map)
 
 
 _LOGGER = logging.getLogger(__name__)
@@ -72,7 +73,12 @@ async def async_setup_entry(
     loxconfig = miniserver.lox_config.json
     entities = []
     air_valves = await async_get_air_valves(hass, miniserver, config_entry)
-    air_by_uuid = {terminal.uuid.lower(): terminal for terminal in air_valves}
+    # The program's physical terminal U differs from its Co K=Q output
+    # UUID, which is often the event key published in LoxAPP3.
+    air_by_uuid = {}
+    for terminal in air_valves:
+        for key in (terminal.uuid, *terminal.event_uuids):
+            air_by_uuid.setdefault(key.lower(), terminal)
     air_button_by_serial = {
         t.serial: t for t in air_valves
         if t.serial and t.kind == "digital"
@@ -80,6 +86,20 @@ async def async_setup_entry(
     }
     visualized = linked_terminal_ids(loxconfig)
     mirrored_events: dict[str, set[str]] = {}
+    # User-supplied verified serial=event UUID pairs; no guessed binding.
+    try:
+        user_button_map = parse_air_button_event_map(
+            config_entry.options.get(CONF_AIR_BUTTON_EVENT_MAP, "")
+        )
+    except ValueError:
+        _LOGGER.warning("Invalid Air button UUID map; ignoring user overrides")
+        user_button_map = {}
+    for serial, event_uuid in user_button_map.items():
+        terminal = air_button_by_serial.get(serial)
+        if terminal is None:
+            _LOGGER.warning("No physical Air Input 1 for configured serial %s", serial)
+            continue
+        mirrored_events.setdefault(terminal.uuid.lower(), set()).add(event_uuid)
     for terminal in air_valves:
         get_or_create_device(
             terminal.device_uuid, terminal.device_name, "Valve Actuator Air", ""
@@ -117,7 +137,10 @@ async def async_setup_entry(
         ):
             entities.append(LoxonePhysicalAirValveBinarySensor(
                 terminal, config_entry,
-                event_uuids=mirrored_events.get(terminal.uuid.lower()),
+                event_uuids=(
+                set(terminal.event_uuids)
+                | mirrored_events.get(terminal.uuid.lower(), set())
+            ),
             ))
 
     for sensor in get_all(loxconfig, "PresenceDetector"):
@@ -161,6 +184,7 @@ class LoxonePhysicalAirValveBinarySensor(BinarySensorEntity):
         )
         self._press_count = 0
         self._last_press = None
+        self._last_event_uuid = None
         self._config_entry = config_entry
         self._poll_interval = air_terminal_poll_interval(config_entry.options)
         self._last_poll = 0.0
@@ -184,6 +208,7 @@ class LoxonePhysicalAirValveBinarySensor(BinarySensorEntity):
             "event_uuids": sorted(self._event_uuids),
             "last_press": None,
             "press_count_since_reload": 0,
+            "last_event_uuid": None,
         }
 
     async def async_added_to_hass(self):
@@ -204,11 +229,13 @@ class LoxonePhysicalAirValveBinarySensor(BinarySensorEntity):
         # Published LoxAPP3 state UUID can differ from the physical
         # terminal UUID. Accept only verified aliases for this head.
         raw = None
+        matched_uuid = None
         for key in self._event_uuids:
             raw = event.data.get(key)
             if raw is None:
                 raw = event.data.get(key.lower())
             if raw is not None:
+                matched_uuid = key
                 break
         if raw is None:
             return
@@ -218,6 +245,8 @@ class LoxonePhysicalAirValveBinarySensor(BinarySensorEntity):
             return
         if value not in (0.0, 1.0):
             return
+        self._last_event_uuid = matched_uuid
+        self._attr_extra_state_attributes["last_event_uuid"] = matched_uuid
         pressed = value == 1.0
         if pressed and self._is_button and self._attr_is_on is not True:
             self._press_count += 1
