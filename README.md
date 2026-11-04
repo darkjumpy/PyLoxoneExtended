@@ -4,10 +4,13 @@
 >
 > This repository (`darkjumpy/PyLoxoneExtended`) is a fork of JoDehli/PyLoxone.
 > The experimental b5 pre-release adds direct manual Valve Actuator Air
-> `DriveTo` control and diagnostic sensors. **Battery Air heads are not
-> automatically woken**; a successful TechReport does not guarantee awake
-> state, and the slider reports last acknowledged request rather than
-> confirmed physical valve position.
+> `DriveTo` control, a per-entity **latest-value-wins pending queue**,
+> a binary **Polecenie oczekuje na wysłanie** indicator, and diagnostics.
+> For battery Air heads it attempts delivery on the next observed natural
+> wake (`TechReport WkupCnt[]`), without physically forcing wake-up.
+> This wake detector is **not yet verified on a full natural polling
+> cycle**, and the slider shows the requested target rather than measured
+> physical opening.
 >
 > To install this fork's beta from HACS, add
 > `https://github.com/darkjumpy/PyLoxoneExtended` as a custom **Integration**
