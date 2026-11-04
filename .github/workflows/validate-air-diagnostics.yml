@@ -39,6 +39,7 @@ jobs:
           source = ast.parse(path.read_text(encoding="utf-8"))
           wanted = {
               "_device_serial",
+              "_air_device_serial",
               "tech_report_confirms_awake",
               "parse_device_report_response",
               "parse_drive_to_response",
@@ -54,7 +55,7 @@ jobs:
                   isinstance(t, ast.Name) and t.id in constants for t in node.targets
               ):
                   nodes.append(node)
-          assert len(nodes) == 8, [getattr(n, "name", "?") for n in nodes]
+          assert len(nodes) == 9, [getattr(n, "name", "?") for n in nodes]
           namespace = {"re": re, "ET": ET}
           exec(compile(ast.Module(body=nodes, type_ignores=[]), str(path), "exec"), namespace)
           payload = (b'<LL Code="200" value="Serial:0123456789ABCDEF;Pos:2364;'
@@ -71,6 +72,11 @@ jobs:
           assert namespace["parse_valve_tech_report"]("WkupCnt[]:18;")["wake_count"] == 18
           assert namespace["parse_device_report_response"](b'<LL Code="401" value="x"/>') is None
           assert namespace["_device_serial"]("01:23:45:67:89:AB:CD:EF") == "0123456789ABCDEF"
+          air_device_serial = namespace["_air_device_serial"]
+          config_ip = ET.Element("C", {"IP": "FE80000000000000524F94FFFE000001"})
+          assert air_device_serial(config_ip) == "504F94FFFE000001"
+          assert air_device_serial(ET.Element("C", {"IP": "fe80::524f:94ff:fe00:0002"})) == "504F94FFFE000002"
+          assert air_device_serial(ET.Element("C", {"IP": "20010DB800000000524F94FFFE000001"})) is None
           link = "Target: 01:23:45:67:89:AB:CD:EF;AvgRssiRx: -83;AvgLqiRx %: 97;ErrorRate %: 0;"
           quality = namespace["parse_link_quality_report"](link)
           assert quality == {"rssi_rx": -83.0, "lqi_rx": 97.0, "error_rate": 0.0}, quality
