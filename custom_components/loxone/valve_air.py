@@ -258,7 +258,7 @@ async def _fetch_project(session: ClientSession, config_entry) -> bytes | None:
             raw = await r.read()
             if len(raw) > MAX_PROGRAM_SIZE:
                 return None
-        return decode_program(raw)
+        return raw
     except Exception as err:  # noqa: BLE001 - best-effort optional feature
         _LOGGER.debug("Air valve discovery unavailable: %s", type(err).__name__)
         return None
@@ -272,10 +272,13 @@ async def async_get_air_valves(hass, miniserver, config_entry) -> list[AirValveT
     if task is None:
         async def load() -> list[AirValveTerminal]:
             session = async_get_clientsession(hass)
-            xml = await _fetch_project(session, config_entry)
-            if xml is None:
+            raw = await _fetch_project(session, config_entry)
+            if raw is None:
                 return []
             try:
+                xml = await hass.async_add_executor_job(decode_program, raw)
+                if xml is None:
+                    return []
                 return await hass.async_add_executor_job(extract_air_valves, xml)
             except Exception as err:  # noqa: BLE001
                 _LOGGER.warning("Cannot read valve actuator topology: %s", type(err).__name__)
