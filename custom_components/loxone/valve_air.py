@@ -12,7 +12,6 @@ This implementation is intentionally limited to Loxone Valve Actuator Air.
 
 from __future__ import annotations
 
-import asyncio
 import io
 import logging
 import re
@@ -55,7 +54,7 @@ def _decode_loxcc(data: bytes) -> bytes | None:
     """Decode Loxone's 16-byte-header + LZ4 block program format."""
     if len(data) < 16:
         return None
-    magic, compressed, expected, _checksum = struct.unpack("<4I", data[:16])
+    magic, _compressed, expected, _checksum = struct.unpack("<4I", data[:16])
     if magic != 0xAABBCCEE or expected > MAX_PROGRAM_SIZE:
         return None
     src = memoryview(data)[16:]
@@ -181,7 +180,6 @@ def extract_air_valves(xml: bytes) -> list[AirValveTerminal]:
             if not term_uuid or term_uuid.lower() in seen:
                 continue
             label = (el.get("Title") or el.get("IName") or "Wejście").strip()
-            low = label.casefold()
             if kind == "LoxAIRAactor":
                 name = "Wysterowanie zaworu"
                 category = "position"
@@ -279,7 +277,12 @@ async def async_get_air_valves(hass, miniserver, config_entry) -> list[AirValveT
                 xml = await hass.async_add_executor_job(decode_program, raw)
                 if xml is None:
                     return []
-                return await hass.async_add_executor_job(extract_air_valves, xml)
+                terminals = await hass.async_add_executor_job(extract_air_valves, xml)
+                _LOGGER.info(
+                    "Physical Air valve discovery found %s devices, %s terminals",
+                    len({t.device_uuid for t in terminals}), len(terminals),
+                )
+                return terminals
             except Exception as err:  # noqa: BLE001
                 _LOGGER.warning("Cannot read valve actuator topology: %s", type(err).__name__)
                 return []
