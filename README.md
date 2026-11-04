@@ -1,4 +1,24 @@
 # PyLoxone
+
+> **PyLoxone Extended fork — experimental 2026.11.0b5**
+>
+> This repository (`darkjumpy/PyLoxoneExtended`) is a fork of JoDehli/PyLoxone.
+> The experimental b5 pre-release adds direct manual Valve Actuator Air
+> `DriveTo` control and diagnostic sensors. **Battery Air heads are not
+> automatically woken**; a successful TechReport does not guarantee awake
+> state, and the slider reports last acknowledged request rather than
+> confirmed physical valve position.
+>
+> To install this fork's beta from HACS, add
+> `https://github.com/darkjumpy/PyLoxoneExtended` as a custom **Integration**
+> repository, select release `2026.11.0b5` once published, and restart
+> Home Assistant. Back up before switching from upstream PyLoxone.
+> See [b5 release notes](docs/release-2026.11.0b5.md) and
+> [manual controls](docs/valve-manual-controls.md).
+>
+> The badges and upstream installation instructions below refer to the original
+> JoDehli/PyLoxone project unless otherwise specified.
+
 ![Installs](https://img.shields.io/badge/dynamic/json?color=41BDF5&logo=home-assistant&label=Installations&cacheSeconds=15600&url=https://analytics.home-assistant.io/custom_integrations.json&query=$.loxone.total)
 [![Latest release](https://img.shields.io/github/v/release/JoDehli/PyLoxone?label=version)](https://github.com/JoDehli/PyLoxone/releases/latest)
 ![Hassfest](https://img.shields.io/github/actions/workflow/status/JoDehli/PyLoxone/hassfest.yaml?label=hassfest)
