@@ -48,7 +48,7 @@ async def async_setup_entry(
     air_valves = await async_get_air_valves(hass, miniserver, config_entry)
     device_valves = {
         terminal.device_uuid: terminal for terminal in air_valves
-        if terminal.manual_value_uuid and terminal.manual_enable_uuid
+        if terminal.manual_value_uuid
     }
     manual_by_uuid = {
         terminal.manual_value_uuid.lower(): terminal
@@ -70,11 +70,11 @@ async def async_setup_entry(
 
 
 class LoxoneAirValveManualValueNumber(NumberEntity):
-    """Target for a Loxone Config wired manual override, never a direct Air motor command."""
+    """Target for an explicit Loxone Config analog Virtual Input to this Air valve."""
 
     _attr_should_poll = True
     _attr_has_entity_name = True
-    _attr_name = "Ręczne otwarcie"
+    _attr_name = "Otwarcie zadane"
     _attr_native_min_value = 0
     _attr_native_max_value = 100
     _attr_native_step = 1
@@ -107,7 +107,7 @@ class LoxoneAirValveManualValueNumber(NumberEntity):
 
     async def async_set_native_value(self, value: float):
         if not self._attr_available:
-            raise ValueError("Manual valve target is not currently available")
+            raise ValueError("Valve input is not currently available")
         if not 0 <= value <= 100:
             raise ValueError("Valve position must be between 0 and 100 percent")
         # Only a dedicated VirtualIn, discovered by its exact project name.
