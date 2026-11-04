@@ -8,6 +8,7 @@ https://github.com/JoDehli/PyLoxone
 import json
 import logging
 import re
+from time import monotonic
 from functools import cached_property
 from typing import Any
 
@@ -25,6 +26,7 @@ from homeassistant.const import (CONF_DEVICE_CLASS, CONF_NAME,
                                  UnitOfSpeed, UnitOfTemperature, UnitOfVolume,
                                  UnitOfVolumeFlowRate)
 from homeassistant.core import HomeAssistant, callback
+from homeassistant.helpers.aiohttp_client import async_get_clientsession
 from homeassistant.helpers.dispatcher import async_dispatcher_connect
 from homeassistant.helpers.entity import DeviceInfo, EntityCategory
 from homeassistant.helpers.entity_platform import AddEntitiesCallback
@@ -36,6 +38,8 @@ from .const import CLIMATE_EVENT, CONF_ACTIONID, DOMAIN, EVENT, SENDDOMAIN, THRO
 from .helpers import (add_room_and_cat_to_value_values, clean_unit, get_all,
                       get_or_create_device)
 from .miniserver import get_miniserver_from_hass
+from .valve_air import async_get_air_valves, async_read_terminal, linked_terminal_ids
+
 
 NEW_SENSOR = "sensors"
 
@@ -217,13 +221,34 @@ async def async_setup_entry(
     loxconfig = miniserver.lox_config.json
     entities: list[Any] = [LoxoneKeepAliveSensor(miniserver.serial)]
 
+    air_valves = await async_get_air_valves(hass, miniserver, config_entry)
+    air_by_uuid = {terminal.uuid.lower(): terminal for terminal in air_valves}
+    visualized = linked_terminal_ids(loxconfig)
+    # Register the physical device before existing visualized sensors.
+    seen_air_devices = set()
+    for terminal in air_valves:
+        get_or_create_device(
+            terminal.device_uuid, terminal.device_name, "Valve Actuator Air", ""
+        )
+        if terminal.device_uuid not in seen_air_devices:
+            entities.append(LoxoneAirValvePowerSourceSensor(terminal))
+            seen_air_devices.add(terminal.device_uuid)
+
     if "softwareVersion" in loxconfig:
         entities.append(LoxoneVersionSensor(miniserver.serial, loxconfig["softwareVersion"]))
 
     for sensor in get_all(loxconfig, "InfoOnlyAnalog"):
         sensor = add_room_and_cat_to_value_values(loxconfig, sensor)
         sensor.update({"type": "analog"})
+        if air_terminal := air_by_uuid.get(sensor["uuidAction"].lower()):
+            sensor["parent_id"] = air_terminal.device_uuid
         entities.append(LoxoneSensor(**sensor))
+
+    # Read-only terminals not part of visualized LoxAPP3 controls.
+    # Loxone's room controller still decides the valve commands.
+    for terminal in air_valves:
+        if terminal.kind == "analog" and terminal.uuid.lower() not in visualized:
+            entities.append(LoxonePhysicalAirValveSensor(terminal, config_entry))
 
     for sensor in get_all(loxconfig, "TextInput"):
         sensor = add_room_and_cat_to_value_values(loxconfig, sensor)
@@ -303,6 +328,90 @@ async def async_setup_entry(
     )
 
     async_add_entities(entities, update_before_add=True)
+
+
+class LoxoneAirValvePowerSourceSensor(SensorEntity):
+    """Configured power mode of a physical Valve Actuator Air.
+
+    This is the Battery flag saved at pairing, not a live supply voltage.
+    Unknown/unavailable XML attributes must not be treated as external power.
+    """
+
+    _attr_has_entity_name = True
+    _attr_should_poll = False
+    _attr_entity_category = EntityCategory.DIAGNOSTIC
+    _attr_device_class = SensorDeviceClass.ENUM
+    _attr_options = ["Baterie", "Zasilanie zewnętrzne", "Nieznane"]
+
+    def __init__(self, terminal):
+        self._attr_unique_id = f"{terminal.device_uuid}_air_power_source"
+        self._attr_name = "Tryb zasilania"
+        self._attr_device_info = get_or_create_device(
+            terminal.device_uuid, terminal.device_name, "Valve Actuator Air", ""
+        )
+        if terminal.battery_powered is True:
+            self._attr_native_value = "Baterie"
+            self._attr_icon = "mdi:battery"
+        elif terminal.battery_powered is False:
+            self._attr_native_value = "Zasilanie zewnętrzne"
+            self._attr_icon = "mdi:power-plug"
+        else:
+            self._attr_native_value = "Nieznane"
+            self._attr_icon = "mdi:help-circle-outline"
+        self._attr_extra_state_attributes = {
+            "data_source": "loxone_project",
+            "mode_measured_live": False,
+        }
+
+
+class LoxonePhysicalAirValveSensor(SensorEntity):
+    """Read one physical Air actuator terminal from Miniserver I/O."""
+
+    _attr_should_poll = True
+    _attr_state_class = SensorStateClass.MEASUREMENT
+
+    def __init__(self, terminal, config_entry):
+        self._terminal = terminal
+        self._config_entry = config_entry
+        self._last_poll = 0.0
+        self._attr_unique_id = terminal.uuid
+        self._attr_name = terminal.name
+        self._attr_has_entity_name = True
+        self._attr_available = False
+        self._attr_native_value = None
+        self._attr_device_info = get_or_create_device(
+            terminal.device_uuid, terminal.device_name, "Valve Actuator Air", ""
+        )
+        self._attr_native_unit_of_measurement = terminal.unit
+        if terminal.category == "temperature":
+            self._attr_device_class = SensorDeviceClass.TEMPERATURE
+            self._attr_native_unit_of_measurement = UnitOfTemperature.CELSIUS
+        elif terminal.category == "battery":
+            self._attr_device_class = SensorDeviceClass.BATTERY
+            self._attr_native_unit_of_measurement = PERCENTAGE
+        elif terminal.category == "diagnostic":
+            self._attr_entity_category = EntityCategory.DIAGNOSTIC
+        self._attr_extra_state_attributes = {
+            "loxone_physical_terminal": terminal.uuid,
+            "loxone_terminal_kind": terminal.category or terminal.kind,
+        }
+        if terminal.category == "position" and terminal.unit is None:
+            self._attr_extra_state_attributes["raw_range"] = "0-10 (Loxone)"
+
+    async def async_update(self) -> None:
+        """Poll the read-only terminal; do not command the physical valve."""
+        now = monotonic()
+        if now - self._last_poll < 120:
+            return
+        self._last_poll = now
+        value = await async_read_terminal(
+            async_get_clientsession(self.hass),
+            self._config_entry,
+            self._terminal.uuid,
+        )
+        self._attr_available = value is not None
+        if value is not None:
+            self._attr_native_value = value
 
 
 class LoxoneCustomSensor(LoxoneEntity, SensorEntity):
