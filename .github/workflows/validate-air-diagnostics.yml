@@ -8,6 +8,10 @@ on:
       - custom_components/loxone/valve_air.py
       - custom_components/loxone/sensor.py
       - custom_components/loxone/number.py
+      - custom_components/loxone/binary_sensor.py
+      - custom_components/loxone/air_command_queue.py
+      - custom_components/loxone/air_command_queue_core.py
+      - tests/test_air_command_queue_core.py
       - custom_components/loxone/manifest.json
       - tests/test_air_valve_extended.py
   workflow_dispatch:
@@ -25,6 +29,7 @@ jobs:
         run: |
           set -euo pipefail
           python -m compileall -q custom_components/loxone tests
+          python -m unittest discover -s tests -p test_air_command_queue_core.py -v
           python - <<'PY'
           import ast
           import re
