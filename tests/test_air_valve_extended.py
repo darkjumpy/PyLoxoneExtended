@@ -7,7 +7,7 @@ from custom_components.loxone.valve_air import (
     extract_air_valves,
     battery_supply_from_attribute,
     linked_terminal_ids,
-    _manual_inputs,
+    _direct_target_input,
     _device_serial,
 )
 
@@ -19,6 +19,8 @@ PROGRAM = b"""<?xml version="1.0"?>
     </C>
     <C Type="LoxAIRAactor" U="valve-a" Title="Si\xc5\x82ownik Air Salon"/>
     <C Type="LoxAIRsensor" U="valve-i" Title="Wej\xc5\x9bcie 1"/>
+    <C Type="LoxAIRAsensor" U="valve-rssi" Title="RSSI"><Display Unit="&lt;v&gt;dB"/></C>
+    <C Type="LoxAIRAsensor" U="valve-link" Title="Link Quality"><Display Unit="&lt;v&gt;%"/></C>
     <C Type="Online" U="valve-o" Title="Status Online"/>
   </C>
   <C Type="LoxAIRDevice" U="device-valve-2" Title="Valve Actuator Kitchen" Battery="false">
@@ -38,7 +40,7 @@ PROGRAM = b"""<?xml version="1.0"?>
 
 def test_extract_air_valve_not_other_air_devices():
     controls = extract_air_valves(PROGRAM)
-    assert {terminal.uuid for terminal in controls} == {"valve-t", "valve-a", "valve-i", "valve-o", "valve-b", "valve-c"}
+    assert {terminal.uuid for terminal in controls} == {"valve-t", "valve-a", "valve-i", "valve-o", "valve-rssi", "valve-link", "valve-b", "valve-c"}
     assert {terminal.device_uuid for terminal in controls} == {"device-valve-1", "device-valve-2", "device-valve-3"}
     assert next(t for t in controls if t.uuid == "valve-t").unit == "\u00b0C"
     assert next(t for t in controls if t.uuid == "valve-a").category == "position"
@@ -76,16 +78,26 @@ def test_pairing_power_mode_is_not_guessed():
     assert battery_supply_from_attribute("unknown") is None
 
 
-def test_manual_pair_only_for_exact_analog_and_digital_virtual_inputs():
+def test_direct_target_requires_exact_one_analog_virtual_input():
     from xml.etree import ElementTree as ET
     terminal = next(t for t in extract_air_valves(PROGRAM) if t.device_uuid == "device-valve-1")
     assert terminal.manual_value_uuid == "manual-v"
-    assert terminal.manual_enable_uuid == "manual-e"
     assert terminal.serial == "504F94AABBCC"
     other = next(t for t in extract_air_valves(PROGRAM) if t.device_uuid == "device-valve-2")
     assert other.manual_value_uuid is None
-    assert other.manual_enable_uuid is None
-    assert _manual_inputs(ET.fromstring(PROGRAM), "unknown") == (None, None)
+    assert _direct_target_input(ET.fromstring(PROGRAM), "unknown") is None
     assert _device_serial("50:4F:94:AA:BB:CC") == "504F94AABBCC"
     assert _device_serial("../Reboot") is None
     assert _device_serial("oops") is None
+
+
+def test_rssi_and_link_quality_are_measurements_only_when_present():
+    terminals = extract_air_valves(PROGRAM)
+    rssi = next(t for t in terminals if t.uuid == "valve-rssi")
+    assert rssi.category == "rssi"
+    assert rssi.unit == "dB"
+    lqi = next(t for t in terminals if t.uuid == "valve-link")
+    assert lqi.category == "link_quality"
+    assert lqi.unit == "%"
+    other = [t for t in terminals if t.device_uuid == "device-valve-2"]
+    assert not any(t.category in ("rssi", "link_quality") for t in other)
