@@ -228,3 +228,9 @@ def test_drive_to_requires_explicit_ok_and_exact_response_target():
             pass
         else:
             raise AssertionError(f"Incorrectly accepted a DriveTo response: {payload!r}")
+
+
+def test_wake_count_from_real_air_tech_report():
+    report = "Serial:0123456789ABCDEF;WkupCnt[]:18;BatteryPowered:1;"
+    assert parse_valve_tech_report(report)["wake_count"] == 18
+    assert parse_valve_tech_report("WkupCnt[]:not-a-number") == {}
