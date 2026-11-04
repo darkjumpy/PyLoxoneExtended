@@ -20,7 +20,7 @@ from homeassistant.helpers.selector import (BooleanSelector, NumberSelector,
                                             TextSelectorConfig,
                                             TextSelectorType)
 
-from .const import (CONF_AIR_VALVE_DISCOVERY, CONF_LIGHTCONTROLLER_SUBCONTROLS_GEN, CONF_SCENE_GEN,
+from .const import (CONF_LIGHTCONTROLLER_SUBCONTROLS_GEN, CONF_SCENE_GEN,
                     CONF_SCENE_GEN_DELAY, CONF_VERIFY_SSL,
                     DEFAULT_DELAY_SCENE, DEFAULT_IP, DEFAULT_PORT,
                     DEFAULT_VERIFY_SSL, DOMAIN)
@@ -103,7 +103,6 @@ DATA_SCHEMA_OPTIONS = vol.Schema(
         vol.Required(
             CONF_LIGHTCONTROLLER_SUBCONTROLS_GEN, default=False
         ): BooleanSelector(),
-        vol.Optional(CONF_AIR_VALVE_DISCOVERY, default=False): BooleanSelector(),
     }
 )
 
