@@ -1,0 +1,72 @@
+name: Publish Valve Actuator Air b8 prerelease (visualization and button)
+
+on:
+  push:
+    branches: [feature/air-valve-manual-controls]
+    paths:
+      - .github/workflows/publish-valve-air-b8.yml
+
+permissions:
+  contents: write
+
+jobs:
+  publish:
+    if: github.repository == 'darkjumpy/PyLoxoneExtended'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Validate b8 version and regression tests
+        shell: bash
+        run: |
+          set -euo pipefail
+          python - <<'PY'
+          import json
+          from pathlib import Path
+          manifest = json.loads(
+              Path("custom_components/loxone/manifest.json").read_text(encoding="utf-8")
+          )
+          assert manifest["version"] == "2026.11.0b8", manifest
+          assert Path("docs/release-2026.11.0b8.md").is_file()
+          number = Path("custom_components/loxone/number.py").read_text(encoding="utf-8")
+          binary = Path("custom_components/loxone/binary_sensor.py").read_text(encoding="utf-8")
+          assert "LoxoneAirValveMappedSlider(" in number
+          assert "LoxoneAirValveVirtualInputNumber(" in number
+          assert "serial_from_ha_valve_slider(" in number
+          assert "async_drive_to(" not in number
+          assert "loxone_air_button_pressed" in binary
+          assert "serial_from_ha_valve_button(" in binary
+          print("b8 UI grouping and event consumption are present")
+          PY
+          python -m compileall -q custom_components/loxone tests
+          python -m unittest discover -s tests -p test_air_visualized_controls.py -v
+          python -m unittest discover -s tests -p test_air_command_queue_core.py -v
+
+      - name: Create immutable b8 pre-release
+        shell: bash
+        env:
+          GH_TOKEN: { github.token }
+        run: |
+          set -euo pipefail
+          TAG="2026.11.0b8"
+          if gh release view "$TAG" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
+            echo "::error::Release $TAG already exists; refusing to overwrite"
+            exit 1
+          fi
+          if gh api "repos/$GITHUB_REPOSITORY/git/ref/tags/$TAG" >/dev/null 2>&1; then
+            echo "::error::Tag $TAG already exists; refusing to move it"
+            exit 1
+          fi
+          gh release create "$TAG" \
+            --repo "$GITHUB_REPOSITORY" \
+            --target "$GITHUB_SHA" \
+            --title "PyLoxone Extended 2026.11.0b8 — Air valve UI and button events" \
+            --notes-file docs/release-2026.11.0b8.md \
+            --prerelease \
+            --latest=false
+          ACTUAL="$(gh api "repos/$GITHUB_REPOSITORY/git/ref/tags/$TAG" --jq '.object.sha')"
+          if [[ "$ACTUAL" != "$GITHUB_SHA" ]]; then
+            echo "::error::Release tag points to $ACTUAL, not tested $GITHUB_SHA"
+            exit 1
+          fi
+          gh release view "$TAG" --repo "$GITHUB_REPOSITORY" \
+            --json tagName,isPrerelease,url --jq '{tag: .tagName, prerelease: .isPrerelease, url: .url}'
