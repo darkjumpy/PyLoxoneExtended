@@ -6,7 +6,9 @@ https://github.com/JoDehli/PyLoxone
 """
 
 import json
+import math
 import logging
+from datetime import timedelta
 import re
 from time import monotonic
 from functools import cached_property
@@ -30,6 +32,7 @@ from homeassistant.helpers.aiohttp_client import async_get_clientsession
 from homeassistant.helpers.dispatcher import async_dispatcher_connect
 from homeassistant.helpers.entity import DeviceInfo, EntityCategory
 from homeassistant.helpers.entity_platform import AddEntitiesCallback
+from homeassistant.helpers.event import async_track_time_interval
 from homeassistant.helpers.typing import ConfigType, DiscoveryInfoType
 from homeassistant.util import dt as dt_util
 
@@ -38,7 +41,9 @@ from .const import CLIMATE_EVENT, CONF_ACTIONID, DOMAIN, EVENT, SENDDOMAIN, THRO
 from .helpers import (add_room_and_cat_to_value_values, clean_unit, get_all,
                       get_or_create_device)
 from .miniserver import get_miniserver_from_hass
-from .valve_air import async_get_air_valves, async_get_valve_diagnostics, async_read_terminal, linked_terminal_ids
+from .valve_air import (air_terminal_poll_interval, async_get_air_valves,
+                        async_get_valve_diagnostics, async_read_terminal,
+                        linked_terminal_ids)
 
 
 NEW_SENSOR = "sensors"
@@ -439,18 +444,21 @@ class LoxoneAirValveDiagnosticSensor(SensorEntity):
         value = values.get(self._field)
         self._attr_available = value is not None
         if value is not None:
-            self._attr_native_value = value
+            self._attr_native_valuclass LoxonePhysicalAirValveSensor(SensorEntity):
+    """Physical Air terminal with event-driven updates and HTTP fallback.
 
+    The 'Wysterowanie zaworu' actuator terminal represents normal Loxone
+    logic output, NOT the measured physical motor position. Direct DriveTo
+    commands intentionally bypass the ordinary demand signal.
+    """
 
-class LoxonePhysicalAirValveSensor(SensorEntity):
-    """Read one physical Air actuator terminal from Miniserver I/O."""
-
-    _attr_should_poll = True
+    _attr_should_poll = False
     _attr_state_class = SensorStateClass.MEASUREMENT
 
     def __init__(self, terminal, config_entry):
         self._terminal = terminal
         self._config_entry = config_entry
+        self._poll_interval = air_terminal_poll_interval(config_entry.options)
         self._last_poll = 0.0
         self._attr_unique_id = terminal.uuid
         self._attr_name = terminal.name
@@ -472,14 +480,45 @@ class LoxonePhysicalAirValveSensor(SensorEntity):
         self._attr_extra_state_attributes = {
             "loxone_physical_terminal": terminal.uuid,
             "loxone_terminal_kind": terminal.category or terminal.kind,
+            "fallback_poll_interval_seconds": self._poll_interval,
         }
-        if terminal.category == "position" and terminal.unit is None:
-            self._attr_extra_state_attributes["raw_range"] = "0-10 (Loxone)"
+        if terminal.category == "position":
+            self._attr_extra_state_attributes.update({
+                "raw_range": "0-10 (normal Loxone output)",
+                "not_measured_opening": True,
+                "drive_to_bypasses_this_value": True,
+            })
+
+    async def async_added_to_hass(self):
+        await super().async_added_to_hass()
+        self.async_on_remove(self.hass.bus.async_listen(EVENT, self._on_event))
+        self.async_on_remove(async_track_time_interval(
+            self.hass, self._on_poll_timer, timedelta(seconds=self._poll_interval)
+        ))
+        self.async_schedule_update_ha_state(force_refresh=True)
+
+    def _on_poll_timer(self, _now):
+        self.async_schedule_update_ha_state(force_refresh=True)
+
+    def _on_event(self, event):
+        raw = event.data.get(self._terminal.uuid)
+        if raw is None or isinstance(raw, bool):
+            return
+        try:
+            value = float(raw)
+        except (ValueError, TypeError):
+            return
+        if not math.isfinite(value):
+            return
+        self._attr_native_value = value
+        self._attr_available = True
+        self._last_poll = monotonic()
+        self.async_write_ha_state()
 
     async def async_update(self) -> None:
-        """Poll the read-only terminal; do not command the physical valve."""
+        """Fetch a physical terminal only when the fallback poll is due."""
         now = monotonic()
-        if now - self._last_poll < 120:
+        if now - self._last_poll < max(1, self._poll_interval * 0.8):
             return
         self._last_poll = now
         value = await async_read_terminal(
@@ -490,6 +529,9 @@ class LoxonePhysicalAirValveSensor(SensorEntity):
         self._attr_available = value is not None
         if value is not None:
             self._attr_native_value = value
+
+
+e = value
 
 
 class LoxoneCustomSensor(LoxoneEntity, SensorEntity):
