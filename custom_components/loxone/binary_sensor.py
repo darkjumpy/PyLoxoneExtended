@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import logging
+from datetime import timedelta
 from typing import Literal, final
 
 import homeassistant.helpers.config_validation as cv
@@ -15,6 +16,7 @@ from homeassistant.const import (CONF_DEVICE_CLASS, CONF_NAME,
                                  CONF_UNIT_OF_MEASUREMENT, CONF_VALUE_TEMPLATE,
                                  STATE_OFF, STATE_ON, STATE_UNKNOWN)
 from homeassistant.core import HomeAssistant, callback
+from homeassistant.helpers.aiohttp_client import async_get_clientsession
 from homeassistant.helpers.dispatcher import async_dispatcher_connect
 from homeassistant.helpers.entity_platform import AddEntitiesCallback
 from homeassistant.helpers.typing import ConfigType, DiscoveryInfoType
@@ -24,6 +26,9 @@ from .const import CONF_ACTIONID, DOMAIN, SENDDOMAIN
 from .helpers import (add_room_and_cat_to_value_values, get_all,
                       get_or_create_device)
 from .miniserver import get_miniserver_from_hass
+from .valve_air import async_get_air_valves, async_read_terminal, linked_terminal_ids
+
+SCAN_INTERVAL = timedelta(seconds=120)
 
 _LOGGER = logging.getLogger(__name__)
 NEW_SENSOR = "binairy_sensors"
@@ -64,11 +69,24 @@ async def async_setup_entry(
     miniserver = get_miniserver_from_hass(hass, config_entry)
     loxconfig = miniserver.lox_config.json
     entities = []
+    air_valves = await async_get_air_valves(hass, miniserver, config_entry)
+    air_by_uuid = {terminal.uuid.lower(): terminal for terminal in air_valves}
+    visualized = linked_terminal_ids(loxconfig)
+    for terminal in air_valves:
+        get_or_create_device(
+            terminal.device_uuid, terminal.device_name, "Valve Actuator Air", ""
+        )
 
     for sensor in get_all(loxconfig, "InfoOnlyDigital"):
         sensor = add_room_and_cat_to_value_values(loxconfig, sensor)
         sensor.update({"type": "digital"})
+        if air_terminal := air_by_uuid.get(sensor["uuidAction"].lower()):
+            sensor["parent_id"] = air_terminal.device_uuid
         entities.append(LoxoneDigitalSensor(**sensor))
+
+    for terminal in air_valves:
+        if terminal.kind == "digital" and terminal.uuid.lower() not in visualized:
+            entities.append(LoxonePhysicalAirValveBinarySensor(terminal, config_entry))
 
     for sensor in get_all(loxconfig, "PresenceDetector"):
         sensor = add_room_and_cat_to_value_values(loxconfig, sensor)
@@ -92,6 +110,43 @@ async def async_setup_entry(
         )
     )
     async_add_entities(entities)
+
+
+class LoxonePhysicalAirValveBinarySensor(BinarySensorEntity):
+    """Expose a physical Air valve digital terminal as a read-only entity."""
+
+    _attr_should_poll = True
+
+    def __init__(self, terminal, config_entry):
+        self._terminal = terminal
+        self._config_entry = config_entry
+        self._attr_unique_id = terminal.uuid
+        self._attr_name = terminal.name
+        self._attr_has_entity_name = True
+        self._attr_is_on = None
+        self._attr_available = False
+        self._attr_device_info = get_or_create_device(
+            terminal.device_uuid, terminal.device_name, "Valve Actuator Air", ""
+        )
+        name = terminal.name.casefold()
+        if terminal.name == "Online":
+            self._attr_device_class = BinarySensorDeviceClass.CONNECTIVITY
+        elif any(word in name for word in ("bateria", "battery", "fehler", "error", "stuck", "blokada")):
+            self._attr_device_class = BinarySensorDeviceClass.PROBLEM
+        self._attr_extra_state_attributes = {
+            "loxone_physical_terminal": terminal.uuid
+        }
+
+    async def async_update(self) -> None:
+        """Fetch the current digital value; never write device commands."""
+        value = await async_read_terminal(
+            async_get_clientsession(self.hass),
+            self._config_entry,
+            self._terminal.uuid,
+        )
+        self._attr_available = value is not None
+        if value is not None:
+            self._attr_is_on = bool(value)
 
 
 class LoxoneDigitalSensor(LoxoneEntity, BinarySensorEntity):
