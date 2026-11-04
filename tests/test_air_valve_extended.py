@@ -11,6 +11,7 @@ from custom_components.loxone.valve_air import (
     _device_serial,
     parse_link_quality_report,
     parse_valve_tech_report,
+    tech_report_confirms_awake,
     parse_device_report_response,
 )
 
@@ -186,3 +187,19 @@ def test_ll_xml_response_and_semicolon_separated_real_tech_report():
     assert "battery_level" not in data
     assert parse_device_report_response(b'<LL Code="401" value="x"/>') is None
     assert parse_device_report_response(b'<html>Unauthorised</html>') is None
+
+
+def test_drive_to_awake_guard_matches_only_this_physical_head():
+    head = "0123456789ABCDEF"
+    assert tech_report_confirms_awake(
+        f"Serial:{head};UpTime:120s;BatteryPowered:1;", head
+    )
+    assert tech_report_confirms_awake(
+        "Serial:01:23:45:67:89:AB:CD:EF;UpTime:9s;", head
+    )
+    assert not tech_report_confirms_awake(None, head)
+    assert not tech_report_confirms_awake("timeout", head)
+    assert not tech_report_confirms_awake(
+        "Serial:FEDCBA9876543210;UpTime:9s;", head
+    )
+    assert not tech_report_confirms_awake("UpTime:9s;", head)
