@@ -5,9 +5,7 @@ For more details about this component, please refer to the documentation at
 https://github.com/JoDehli/PyLoxone
 """
 
-import asyncio
 import logging
-from time import monotonic
 
 from homeassistant.components.number import NumberEntity, NumberMode
 from homeassistant.config_entries import ConfigEntry
@@ -22,8 +20,8 @@ from .helpers import (add_room_and_cat_to_value_values, clean_unit, get_all,
                       get_or_create_device)
 from .miniserver import get_miniserver_from_hass
 from .valve_air import async_get_air_valves, async_drive_to
+from .air_command_queue import async_get_air_command_queue
 from homeassistant.helpers.aiohttp_client import async_get_clientsession
-from homeassistant.exceptions import HomeAssistantError
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -48,10 +46,23 @@ async def async_setup_entry(
     loxconfig = miniserver.lox_config.json
     entities = []
     air_valves = await async_get_air_valves(hass, miniserver, config_entry)
-    # One control per physical head, no virtual input or Loxone Config rewiring.
+    # Each physical head owns an independent queue parameter: valve_position.
+    # The generic queue can also handle brightness, CCT, etc. on future devices.
+    queue = await async_get_air_command_queue(hass, miniserver, config_entry)
     unique = {terminal.device_uuid: terminal for terminal in air_valves if terminal.serial}
     for terminal in unique.values():
-        entities.append(LoxoneAirValveDirectPositionNumber(terminal, config_entry))
+        serial, battery_powered = terminal.serial, terminal.battery_powered
+
+        async def deliver(value: float, head=serial, battery=battery_powered):
+            await async_drive_to(
+                async_get_clientsession(hass), config_entry, head,
+                value, battery, already_probed=(battery is not False),
+            )
+
+        queue.register_sender(
+            serial, "valve_position", deliver, battery_powered=battery_powered
+        )
+        entities.append(LoxoneAirValveDirectPositionNumber(terminal, queue))
 
     for number_entity in get_all(loxconfig, ["Slider", "ValueSelector"]):
         number_entity = add_room_and_cat_to_value_values(loxconfig, number_entity)
@@ -62,12 +73,7 @@ async def async_setup_entry(
 
 
 class LoxoneAirValveDirectPositionNumber(NumberEntity):
-    """Set physical Valve Actuator Air position with the device's DriveTo shell.
-
-    The state is only the last ACKNOWLEDGED request in this HA session, not
-    a measured mechanical position. The direct shell bypasses normal
-    RequestedPercent/DesiredPercent values in TechReport.
-    """
+    """Queued manual target, not the actuator's verified mechanical position."""
 
     _attr_should_poll = False
     _attr_has_entity_name = True
@@ -79,42 +85,63 @@ class LoxoneAirValveDirectPositionNumber(NumberEntity):
     _attr_mode = NumberMode.SLIDER
     _attr_entity_category = EntityCategory.CONFIG
     _attr_icon = "mdi:valve"
+    _attr_assumed_state = True
 
-    def __init__(self, terminal, config_entry):
+    def __init__(self, terminal, queue):
         self._attr_unique_id = f"{terminal.device_uuid}_air_direct_drive_to"
         self._attr_device_info = get_or_create_device(
             terminal.device_uuid, terminal.device_name, "Valve Actuator Air", ""
         )
         self._serial = terminal.serial
-        self._battery_powered = terminal.battery_powered
-        self._config_entry = config_entry
-        self._attr_native_value = None
-        self._attr_available = True
-        self._attr_assumed_state = True
-        self._attr_extra_state_attributes = {
-            "value_meaning": "last acknowledged DriveTo command (not measured position)",
-            "unconfirmed_on_timeout": True,
-            "protocol": "experimental_air_device_shell",
+        self._queue = queue
+        self._parameter = "valve_position"
+        pending = queue.get_pending(self._serial, self._parameter)
+        self._attr_native_value = (
+            pending.value if pending is not None
+            else queue.last_ack(self._serial, self._parameter)
+        )
+
+    async def async_added_to_hass(self):
+        await super().async_added_to_hass()
+        self.async_on_remove(self._queue.subscribe(
+            self._serial, self._parameter, self._refresh_from_queue
+        ))
+
+    def _refresh_from_queue(self):
+        pending = self._queue.get_pending(self._serial, self._parameter)
+        self._attr_native_value = (
+            pending.value if pending is not None
+            else self._queue.last_ack(self._serial, self._parameter)
+        )
+        self.async_write_ha_state()
+
+    @property
+    def extra_state_attributes(self):
+        pending = self._queue.get_pending(self._serial, self._parameter)
+        return {
+            "queue_parameter": self._parameter,
+            "pending": pending is not None,
+            "pending_value": pending.value if pending else None,
+            "last_acknowledged_value": self._queue.last_ack(
+                self._serial, self._parameter
+            ),
+            "last_error": self._queue.last_error(self._serial, self._parameter),
+            "value_meaning": "requested position; not measured opening",
+            "wake_detection": "TechReport WkupCnt[] change (experimental)",
         }
-        self._lock = asyncio.Lock()
-        self._last_attempt = None
 
     async def async_set_native_value(self, value: float):
-        """Issue one command; never auto-retry on timeout or sleeping Air."""
-        async with self._lock:
-            now = monotonic()
-            if self._last_attempt is not None and now - self._last_attempt < 15:
-                raise HomeAssistantError(
-                    "Odczekaj co najmniej 15 sekund między poleceniami DriveTo"
-                )
-            self._last_attempt = now
-            await async_drive_to(
-                async_get_clientsession(self.hass), self._config_entry,
-                self._serial, value, self._battery_powered,
-            )
-            # Successful LL 'ok' confirms command reception only.
-            self._attr_native_value = float(value)
-            self.async_write_ha_state()
+        """Replace pending setpoint only for this head's valve_position."""
+        from homeassistant.exceptions import HomeAssistantError
+        import math
+
+        if (
+            isinstance(value, bool) or not isinstance(value, (int, float))
+            or not math.isfinite(value) or int(value) != value
+            or not 0 <= value <= 100
+        ):
+            raise HomeAssistantError("Otwarcie zaworu musi wynosić 0–100%")
+        await self._queue.async_enqueue(self._serial, self._parameter, value)
 
 
 class LoxoneNumber(LoxoneEntity, NumberEntity):
