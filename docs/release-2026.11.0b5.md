@@ -2,7 +2,7 @@
 
 > **Pending hardware validation:** the natural Air wake detector is implemented,
 > but has NOT been validated through a complete 5-minute sleep/wake cycle on
-> the user's real Valve Actuator Air. Do not publish b5 as reliable unattended
+> the user's real Valve Actuator Air. Do not treat this pre-release as reliable unattended
 > room heating control until that test passes.
 >
 > This feature cannot remotely force an Air head out of deep battery sleep.
@@ -10,7 +10,7 @@
 
 **Version:** `2026.11.0b5`  
 **Branch:** `feature/air-valve-manual-controls`  
-**Planned tag:** `2026.11.0b5` (not created)  
+**Release tag:** `2026.11.0b5`  
 **Mark as:** Pre-release
 
 ## Main changes
@@ -66,7 +66,7 @@
   tests, and hassfest.
 - GitHub HACS validation currently fails repository metadata checks
   (missing accepted topics and GitHub Issues disabled), not Python checks.
-- Before publishing, conduct a real **battery sleep test**: queue 30%, change
+- After installing this pre-release, conduct a real **battery sleep test**: queue 30%, change
   to 50% before the 5-minute wake, observe the pending binary sensor
   stay on, then confirm that only 50% is attempted and `value=ok`
   clears the pending item. Test a timeout and a reload as well.
