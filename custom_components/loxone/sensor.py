@@ -43,7 +43,7 @@ from .helpers import (add_room_and_cat_to_value_values, clean_unit, get_all,
 from .miniserver import get_miniserver_from_hass
 from .valve_air import (air_terminal_poll_interval, async_get_air_valves,
                         async_get_valve_diagnostics, async_read_terminal,
-                        linked_terminal_ids)
+                        linked_terminal_ids, valve_output_to_percent)
 
 
 NEW_SENSOR = "sensors"
@@ -497,7 +497,8 @@ class LoxonePhysicalAirValveSensor(SensorEntity):
         }
         if terminal.category == "position":
             self._attr_extra_state_attributes.update({
-                "raw_range": "0-10 (normal Loxone output)",
+                "source_raw_range": "0-10 (normal Loxone output)",
+                "display_scale": "0–100%",
                 "not_measured_opening": True,
                 "drive_to_bypasses_this_value": True,
             })
@@ -523,6 +524,11 @@ class LoxonePhysicalAirValveSensor(SensorEntity):
             return
         if not math.isfinite(value):
             return
+        if self._terminal.category == "position":
+            converted = valve_output_to_percent(value)
+            if converted is None:
+                return
+            value = converted
         self._attr_native_value = value
         self._attr_available = True
         self._last_poll = monotonic()
@@ -539,6 +545,8 @@ class LoxonePhysicalAirValveSensor(SensorEntity):
             self._config_entry,
             self._terminal.uuid,
         )
+        if value is not None and self._terminal.category == "position":
+            value = valve_output_to_percent(value)
         self._attr_available = value is not None
         if value is not None:
             self._attr_native_value = value
