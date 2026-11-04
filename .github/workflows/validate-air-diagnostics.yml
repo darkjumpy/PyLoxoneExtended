@@ -68,6 +68,7 @@ jobs:
           assert values["reference_state"] == "successful", values
           assert values["battery_powered"] is False, values
           assert "battery_level" not in values, values
+          assert namespace["parse_valve_tech_report"]("WkupCnt[]:18;")["wake_count"] == 18
           assert namespace["parse_device_report_response"](b'<LL Code="401" value="x"/>') is None
           assert namespace["_device_serial"]("01:23:45:67:89:AB:CD:EF") == "0123456789ABCDEF"
           link = "Target: 01:23:45:67:89:AB:CD:EF;AvgRssiRx: -83;AvgLqiRx %: 97;ErrorRate %: 0;"
@@ -103,5 +104,15 @@ jobs:
               pass
           else:
               raise AssertionError("DriveTo accepted an incorrect device")
-          print("Air XML reports, readiness guard and DriveTo acknowledgement tests passed.")
+          wake_source = ast.parse(Path("custom_components/loxone/air_command_queue.py").read_text(encoding="utf-8"))
+          wake_function = next(
+              node for node in wake_source.body
+              if isinstance(node, ast.FunctionDef) and node.name == "wake_counter_from_tech_report"
+          )
+          wake_namespace = {"re": re}
+          exec(compile(ast.Module(body=[wake_function], type_ignores=[]), "queue.py", "exec"), wake_namespace)
+          wake_value = wake_namespace["wake_counter_from_tech_report"]
+          assert wake_value("Serial:0123456789ABCDEF;WkupCnt[]:19;") == 19
+          assert wake_value("Serial:0123456789ABCDEF;") is None
+          print("Air XML reports, wake counter, readiness guard and DriveTo parsing passed.")
           PY
