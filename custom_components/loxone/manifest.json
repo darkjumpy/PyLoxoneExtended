@@ -1,7 +1,9 @@
 {
   "domain": "loxone",
   "name": "PyLoxone Extended",
-  "codeowners": ["@darkjumpy"],
+  "codeowners": [
+    "@darkjumpy"
+  ],
   "config_flow": true,
   "dependencies": [],
   "documentation": "https://github.com/darkjumpy/PyLoxoneExtended",
@@ -11,5 +13,5 @@
     "websockets>=14,<16",
     "pycryptodome>=3.20"
   ],
-  "version": "0.10.1+extended.1"
+  "version": "2026.11.0b1"
 }
