@@ -351,7 +351,7 @@ AIR_VALVE_DIAGNOSTIC_FIELDS = {
 
 
 class LoxoneAirValvePowerSourceSensor(SensorEntity):
-    """Configured supply mode, superseded by live TechReport if available."""
+    """Actual supply from TechReport, not a potentially stale project setting."""
 
     _attr_has_entity_name = True
     _attr_entity_category = EntityCategory.DIAGNOSTIC
@@ -367,13 +367,17 @@ class LoxoneAirValvePowerSourceSensor(SensorEntity):
         self._serial = terminal.serial
         self._config_entry = config_entry
         self._miniserver = miniserver
-        self._battery_powered = terminal.battery_powered
+        self._configured_battery = terminal.battery_powered
         self._attr_should_poll = bool(self._serial)
         self._attr_extra_state_attributes = {
-            "data_source": "loxone_project",
+            "data_source": "unverified",
             "mode_measured_live": False,
+            "configured_battery_mode": self._configured_battery,
         }
-        self._update_value(self._battery_powered)
+        # Battery= in the Loxone project is pairing configuration and can
+        # differ from actual external/battery power (e.g. retrofitted 24 V).
+        # Do not mislabel such devices as physically battery powered.
+        self._update_value(None)
 
     def _update_value(self, battery: bool | None) -> None:
         if battery is True:
@@ -391,13 +395,14 @@ class LoxoneAirValvePowerSourceSensor(SensorEntity):
             return
         values = await async_get_valve_diagnostics(
             self.hass, self._miniserver, self._config_entry,
-            self._serial, self._battery_powered,
+            self._serial, self._configured_battery,
         )
-        if "battery_powered" in values:
+        if isinstance(values.get("battery_powered"), bool):
             self._update_value(values["battery_powered"])
             self._attr_extra_state_attributes = {
                 "data_source": "loxone_tech_report",
                 "mode_measured_live": True,
+                "configured_battery_mode": self._configured_battery,
             }
 
 
