@@ -75,10 +75,14 @@
           "verify_ssl": "Verify the Miniserver TLS certificate",
           "generate_scenes": "Generate scenes",
           "generate_lightcontroller_subcontrols": "Enable LightControllerV2 subcontrols by default",
-          "generate_scenes_delay": "Delay for the scene generation if enabled"
+          "generate_scenes_delay": "Delay for the scene generation if enabled",
+          "air_terminal_poll_interval": "Physical Air input and sensor polling interval (seconds)"
         },
         "description": "PyLoxone edit settings:",
-        "title": "PyLoxone settings"
+        "title": "PyLoxone settings",
+        "data_description": {
+          "air_terminal_poll_interval": "5–600 seconds, default 120. Fallback polling of physical Air I/O; websocket events are processed immediately when available."
+        }
       }
     }
   },
