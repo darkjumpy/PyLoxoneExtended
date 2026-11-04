@@ -1,26 +1,36 @@
 # PyLoxone
 
-> **PyLoxone Extended fork — experimental 2026.11.0b6**
+> **PyLoxone Extended fork — 2026.11.0b7 (experimental Pre-release)**
 >
-> This repository (`darkjumpy/PyLoxoneExtended`) is a fork of JoDehli/PyLoxone.
-> The experimental b6 pre-release fixes Air head serial discovery and adds direct
-> `DriveTo` control, a per-entity **latest-value-wins pending queue**,
-> a binary **Polecenie oczekuje na wysłanie** indicator, and diagnostics.
-> For battery Air heads it attempts delivery on the next observed natural
-> wake (`TechReport WkupCnt[]`), without physically forcing wake-up.
-> This wake detector is **not yet verified on a full natural polling
-> cycle**, and the slider shows the requested target rather than measured
-> physical opening.
+> This repository (`darkjumpy/PyLoxoneExtended`) is a fork of
+> JoDehli/PyLoxone. This beta replaces the experimental direct
+> Valve Actuator Air `DriveTo` commands, which moved a motor but could
+> later be overwritten by ordinary Loxone control.
 >
-> To install this fork's beta from HACS, add
-> `https://github.com/darkjumpy/PyLoxoneExtended` as a custom **Integration**
-> repository, select release `2026.11.0b6` once published, and restart
-> Home Assistant. Back up before switching from upstream PyLoxone.
-> See [b6 release notes](docs/release-2026.11.0b6.md) and
-> [manual controls](docs/valve-manual-controls.md).
+> **New control:** one named **analog Virtual Input (0–10)** per head, manually
+> created and wired to the physical Air actuator in **Loxone Config**.
+> The HA slider **Otwarcie zadane (HA)** remains attached to the physical
+> Valve Actuator Air device and controls 0–100%; HA writes to the Miniserver
+> input (50% → 5.0) and reads back its current setpoint.
 >
-> The badges and upstream installation instructions below refer to the original
-> JoDehli/PyLoxone project unless otherwise specified.
+> **The integration does not create or wire inputs in Loxone Config.**
+> If the required Virtual Input is missing, HA leaves the slider unavailable
+> and does not fall back to `DriveTo`. The previous experimental Air
+> command queue is no longer activated for this valve.
+>
+> Also includes configurable fallback polling (5–600 seconds, default
+> 120) for physical Air terminal entities, immediate Loxone event updates
+> where available, power-source diagnostics and estimated motor position
+> (not a confirmed measurement).
+>
+> In HACS, add `https://github.com/darkjumpy/PyLoxoneExtended` as a
+> custom **Integration** repository, choose Pre-release
+> `2026.11.0b7`, then restart Home Assistant. See the
+> [b7 release notes](docs/release-2026.11.0b7.md) and
+> [Virtual Input setup guide](docs/valve-virtual-input-control.md).
+>
+> The badges and upstream installation instructions below refer to the
+> original JoDehli/PyLoxone project unless otherwise indicated.
 
 ![Installs](https://img.shields.io/badge/dynamic/json?color=41BDF5&logo=home-assistant&label=Installations&cacheSeconds=15600&url=https://analytics.home-assistant.io/custom_integrations.json&query=$.loxone.total)
 [![Latest release](https://img.shields.io/github/v/release/JoDehli/PyLoxone?label=version)](https://github.com/JoDehli/PyLoxone/releases/latest)
