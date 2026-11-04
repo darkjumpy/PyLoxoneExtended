@@ -11,6 +11,7 @@ from custom_components.loxone.valve_air import (
     _device_serial,
     parse_link_quality_report,
     parse_valve_tech_report,
+    parse_device_report_response,
 )
 
 PROGRAM = b"""<?xml version="1.0"?>
@@ -167,3 +168,21 @@ Batt[%]:127
         "battery_powered": True,
     }
     assert parse_valve_tech_report("RequestedPercent:999\nBatteryPowered:4") == {}
+
+
+def test_ll_xml_response_and_semicolon_separated_real_tech_report():
+    payload = (b'<LL control="dev/sys/wsdevice/0123456789ABCDEF/TechReport" '
+               b'value="Serial:0123456789ABCDEF;Pos:2364;StartPos:150;MaxPos:2364;'
+               b'RequestedPercent:0;DestinationPercent:0;BatteryPowered:0;'
+               b'RefDriveState:successful;Batt[%]:127;" Code="200"/>')
+    text = parse_device_report_response(payload)
+    assert text is not None
+    data = parse_valve_tech_report(text)
+    assert data["motor_steps"] == 2364
+    assert data["requested_percent"] == 0
+    assert data["destination_percent"] == 0
+    assert data["reference_state"] == "successful"
+    assert data["battery_powered"] is False
+    assert "battery_level" not in data
+    assert parse_device_report_response(b'<LL Code="401" value="x"/>') is None
+    assert parse_device_report_response(b'<html>Unauthorised</html>') is None
