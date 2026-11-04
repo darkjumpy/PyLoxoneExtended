@@ -8,7 +8,6 @@ https://github.com/JoDehli/PyLoxone
 from functools import cached_property
 import json
 import logging
-from time import monotonic
 
 from homeassistant.components.switch import SwitchEntity
 from homeassistant.config_entries import ConfigEntry
@@ -22,8 +21,6 @@ from .const import SENDDOMAIN
 from .helpers import (add_room_and_cat_to_value_values, get_all,
                       get_or_create_device)
 from .miniserver import get_miniserver_from_hass
-from .valve_air import async_get_air_valves, async_read_terminal, linked_terminal_ids
-from homeassistant.helpers.aiohttp_client import async_get_clientsession
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -47,21 +44,8 @@ async def async_setup_entry(
     miniserver = get_miniserver_from_hass(hass, config_entry)
     loxconfig = miniserver.lox_config.json
     entities = []
-    valves = await async_get_air_valves(hass, miniserver, config_entry)
-    manual_devices = {
-        terminal.device_uuid: terminal for terminal in valves
-        if terminal.manual_value_uuid and terminal.manual_enable_uuid
-    }
-    visualized = linked_terminal_ids(loxconfig)
-    manual_by_uuid = {t.manual_enable_uuid.lower(): t for t in manual_devices.values()}
-    for terminal in manual_devices.values():
-        if terminal.manual_enable_uuid.lower() not in visualized:
-            entities.append(LoxoneAirValveManualModeSwitch(terminal, config_entry))
-
     for switch_entity in get_all(loxconfig, ["Switch", "TimedSwitch", "Intercom", "IRoomControllerV2", "LightControllerV2"]):
         switch_entity = add_room_and_cat_to_value_values(loxconfig, switch_entity)
-        if match := manual_by_uuid.get(switch_entity["uuidAction"].lower()):
-            switch_entity["parent_id"] = match.device_uuid
 
         if switch_entity["type"] in ["Switch"]:
             new_switch = LoxoneSwitch(**switch_entity)
@@ -98,52 +82,6 @@ async def async_setup_entry(
                 override_kwargs = {**switch_entity, "type": "PresenceDetectionSwitch"}
                 entities.append(LoxoneLightPresenceSwitch(**override_kwargs))
     async_add_entities(entities)
-
-
-class LoxoneAirValveManualModeSwitch(SwitchEntity):
-    """Select AUTO/manual through a dedicated Loxone virtual digital input."""
-
-    _attr_should_poll = True
-    _attr_has_entity_name = True
-    _attr_name = "Tryb ręczny"
-    _attr_entity_category = EntityCategory.CONFIG
-
-    def __init__(self, terminal, config_entry):
-        self._attr_unique_id = f"{terminal.device_uuid}_ha_manual_enable"
-        self._attr_device_info = get_or_create_device(
-            terminal.device_uuid, terminal.device_name, "Valve Actuator Air", ""
-        )
-        self._control_uuid = terminal.manual_enable_uuid
-        self._config_entry = config_entry
-        self._attr_is_on = None
-        self._attr_available = False
-        self._last_poll = 0.0
-
-    async def async_update(self):
-        now = monotonic()
-        if now - self._last_poll < 30:
-            return
-        self._last_poll = now
-        value = await async_read_terminal(
-            async_get_clientsession(self.hass), self._config_entry, self._control_uuid
-        )
-        self._attr_available = value is not None
-        if value is not None:
-            self._attr_is_on = bool(value)
-
-    async def async_turn_on(self, **kwargs):
-        if not self._attr_available:
-            raise ValueError("Loxone manual override input is unavailable")
-        self.hass.bus.async_fire(
-            SENDDOMAIN, {"uuid": self._control_uuid, "value": "1"}
-        )
-
-    async def async_turn_off(self, **kwargs):
-        if not self._attr_available:
-            raise ValueError("Loxone manual override input is unavailable")
-        self.hass.bus.async_fire(
-            SENDDOMAIN, {"uuid": self._control_uuid, "value": "0"}
-        )
 
 
 class LoxoneTimedSwitch(LoxoneEntity, SwitchEntity):
