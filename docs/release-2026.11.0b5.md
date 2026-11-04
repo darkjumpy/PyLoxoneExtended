@@ -1,5 +1,14 @@
 # PyLoxone Extended 2026.11.0b5 — pre-release
 
+> ⚠️ **RELEASE BLOCKER: Automatic wake/keep-awake was explicitly required by the
+> user and is NOT implemented. Do not publish b5 as an operational valve
+> controller yet.** The present TechReport check only tests whether a
+> device responds; it does not initiate wake-up. Before release,
+> determine and verify the Loxone Config Keep device awake API, or agree
+> on an explicitly delayed, queued delivery mechanism. Neither can be
+> represented as immediate wake-up for sleeping battery Air devices.
+>
+
 **Status:** Experimental beta for manual tests on a real Home Assistant + Loxone Miniserver.
 **Source branch:** `feature/air-valve-manual-controls`.
 **Release tag:** `2026.11.0b5`.
