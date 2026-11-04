@@ -60,6 +60,7 @@ class AirCommandQueue:
         self._wake_seen: dict[str, int] = {}
         self._attempted_wake: dict[Key, int] = {}
         self._attempted_at: dict[Key, float] = {}
+        self._attempted_revision: dict[Key, int] = {}
         self._save_lock = asyncio.Lock()
         self._stopped = False
 
@@ -141,7 +142,7 @@ class AirCommandQueue:
 
     def _start_worker(self, serial: str):
         if self._stopped or not any(
-            item.parameter in {p for (s, p) in self._senders if s == serial}
+            (serial, item.parameter) in self._senders
             for item in self.pending.by_device(serial)
         ):
             return
@@ -173,6 +174,7 @@ class AirCommandQueue:
         elif monotonic() - self._attempted_at.get(key, 0.0) < 300:
             return
         self._attempted_at[key] = monotonic()
+        self._attempted_revision[key] = item.revision
         try:
             await sender(item.value)
         except asyncio.CancelledError:
@@ -208,7 +210,7 @@ class AirCommandQueue:
                 if self._battery.get(serial) is False:
                     for item in available:
                         key = (serial, item.parameter)
-                        if self._attempted_at.get(key) is None:
+                        if self._attempted_revision.get(key) != item.revision:
                             await self._attempt(item, None)
                     await self._wait(serial, POLL_WHILE_PENDING)
                     continue
