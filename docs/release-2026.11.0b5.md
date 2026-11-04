@@ -1,72 +1,79 @@
-# PyLoxone Extended 2026.11.0b5 — pre-release
+# PyLoxone Extended 2026.11.0b5 — experimental prerelease
 
-> ⚠️ **RELEASE BLOCKER: Automatic wake/keep-awake was explicitly required by the
-> user and is NOT implemented. Do not publish b5 as an operational valve
-> controller yet.** The present TechReport check only tests whether a
-> device responds; it does not initiate wake-up. Before release,
-> determine and verify the Loxone Config Keep device awake API, or agree
-> on an explicitly delayed, queued delivery mechanism. Neither can be
-> represented as immediate wake-up for sleeping battery Air devices.
+> **Pending hardware validation:** the natural Air wake detector is implemented,
+> but has NOT been validated through a complete 5-minute sleep/wake cycle on
+> the user's real Valve Actuator Air. Do not publish b5 as reliable unattended
+> room heating control until that test passes.
 >
+> This feature cannot remotely force an Air head out of deep battery sleep.
+> It waits for the next observed natural wake, then attempts delivery.
 
-**Status:** Experimental beta for manual tests on a real Home Assistant + Loxone Miniserver.
-**Source branch:** `feature/air-valve-manual-controls`.
-**Release tag:** `2026.11.0b5`.
-**HA integration manifest:** `2026.11.0b5`.
+**Version:** `2026.11.0b5`  
+**Branch:** `feature/air-valve-manual-controls`  
+**Planned tag:** `2026.11.0b5` (not created)  
+**Mark as:** Pre-release
 
-## Added
+## Main changes
 
-- Direct manual 0–100% Valve Actuator Air position slider **Bezpośrednie otwarcie** in HA.
-- Direct Miniserver device command `/dev/sys/wsdevice/<serial>/DriveTo/<percentage>` with no Loxone Config Virtual Input.
-- Strict reply checking: only LL `Code=200`, matching `control`, and `value=ok` acknowledge a request.
-- Battery/unknown-powered actuator readiness check via `TechReport` before attempting `DriveTo`. It verifies a report for the correct serial, **not** that the head is awake.
-- Read-only per-head `TechReport` diagnostics: reported percentages, calibration state, motor errors and power mode.
-- Best-effort RSSI/LQI access with device serial validation. Unsupported fields remain unavailable.
-- Shared cached diagnostic requests and read/command parsing tests.
+- Automatically discover physical Valve Actuator Air units and their terminals
+  from the Miniserver program, without creating Loxone Config Virtual Inputs.
+- New `number.Bezpośrednie otwarcie`: queue the latest requested
+  `DriveTo/<integer 0–100>` setpoint, rather than sending immediately.
+- New `binary_sensor.Polecenie oczekuje na wysłanie`: on when a
+  setpoint is waiting for confirmed command acknowledgement; attributes
+  include `pending_value`, `queued_at`, last acknowledged value, and
+  last error.
+- **Latest-value-wins per physical head AND per parameter.**
+  If 30% is still pending and 50% is requested, only 50% remains pending.
+  Future controls such as brightness and colour temperature are isolated
+  by their own parameter keys. This beta implements the actual sender only
+  for `valve_position` on Air valve heads.
+- Pending setpoints survive Home Assistant reload/restart in local storage.
+  Safety expiry: 60 minutes, to prevent very stale heating requests.
+- For battery-operated (or unknown-supply) heads, read
+  `TechReport` approximately every 10 seconds while pending, verify
+  the Air serial, detect candidate new wakes via `WkupCnt[]`, and send
+  once during that candidate wake. On unconfirmed `timeout`, leave
+  the setpoint pending and await the next distinct wake count.
+- An explicit external power mode skips wake detection and sends immediately.
+- Reported `TechReport` diagnostic entities and best-effort Air RSSI/LQI.
 
-## Breaking/changed behavior
+## Limitations and safety
 
-- The b4 manual valve slider used an analog Virtual Input in Loxone Config.
-  In b5 the slider sends **direct device-shell commands**. An existing
-  Virtual Input is no longer used by this entity.
-- The slider shows the *last acknowledged command in the current HA session*,
-  not a measured valve opening; it starts in an unknown state.
+- **Natural wake timing is not yet confirmed on hardware.** We know a
+  real battery Air head returns `WkupCnt[]`, and the device-shell
+  `DriveTo/0`, `/1` and `/100` produced motion in manual tests.
+  We do **not** yet know if every natural 5-minute polling cycle causes
+  `WkupCnt[]` to change or whether a 10-second HTTP probe catches it.
+- A matching `TechReport` and changed wake count are *candidate* wake
+  evidence, not an absolute guarantee that `DriveTo` will respond before
+  the head goes back to sleep.
+- A `DriveTo` `value=ok` response acknowledges receipt, not the final
+  physical motor position. The number slider shows the **requested target**,
+  not measured opening. The pending sensor shows delivery status.
+- `value=timeout` is **not** success; unconfirmed commands are not
+  blindly repeated within the same observed wake.
+- No arbitrary new RGB lighting control is exposed yet. The generic
+  per-parameter queue is infrastructure for other Air devices in future.
+- Do not use this experimental pre-release as sole frost/heating protection;
+  validate the real actuator path first.
+- Basic Auth over HTTP exposes credentials on the trusted LAN.
+  Never expose Miniserver device-shell commands to the public internet.
 
-## Known limitations — please read before installing
+## Validation and deployment
 
-- **No automatic wake-up of battery Air heads.** Loxone may reply
-  `value=timeout` to DriveTo while the head is sleeping. A successful
-  `TechReport` can be served by the Miniserver and **does not ensure**
-  that the device is awake. Use Loxone Config's `Keep device awake`
-  (then wait until the next Air wake) or the head's physical wake button.
-- No blind retry on `timeout`. The command may be pending or unconfirmed.
-- Acknowledgement `ok` confirms receipt only; the final motor position
-  has not been independently verified.
-- Manual hardware tests of `DriveTo/0`, `/1`, and `/100` indicate
-  percent-like semantics; intermediate setpoints and long-term persistence
-  are not yet verified.
-- `RequestedPercent` and `DestinationPercent` from TechReport may remain
-  zero even while direct DriveTo moves the motor.
-- `GetLinkQuality` via HTTP is not yet confirmed for all firmware/heads.
-- Do not use this beta as the sole method of heating or frost protection.
+- GitHub Actions: Python syntax, pure queue tests, XML and DriveTo parser
+  tests, and hassfest.
+- GitHub HACS validation currently fails repository metadata checks
+  (missing accepted topics and GitHub Issues disabled), not Python checks.
+- Before publishing, conduct a real **battery sleep test**: queue 30%, change
+  to 50% before the 5-minute wake, observe the pending binary sensor
+  stay on, then confirm that only 50% is attempted and `value=ok`
+  clears the pending item. Test a timeout and a reload as well.
+- Back up HA, install beta from
+  `darkjumpy/PyLoxoneExtended` in HACS after a pre-release tag is
+  published, and restart Home Assistant.
+- Rollback: reinstall `2026.11.0b4`, restart HA, and restore prior
+  configuration as needed.
 
-## Deployment
-
-1. Back up HA and any existing `custom_components/loxone` files.
-2. Publish the release from the current head of `feature/air-valve-manual-controls`
-   with **tag `2026.11.0b5`**, set **pre-release**, and do not mark latest.
-3. In HACS choose PyLoxoneExtended `2026.11.0b5`, restart HA or reload
-   integration, then find the physical Valve Actuator Air in Devices.
-4. Begin tests on one head with no competing room-controller output.
-5. Roll back to `2026.11.0b4` if direct control is unsuitable.
-
-## Release validation
-
-- Source syntax and parser smoke checks: .github/workflows/validate-air-diagnostics.yml
-- Home Assistant integration validation: .github/workflows/hassfest.yaml
-- HACS repository checks: .github/workflows/validate.yaml
-  (at the time of preparation, HACS reports repository settings problems:
-   missing accepted topics and disabled GitHub Issues; these are not Python
-   parser errors).
-
-Full documentation: [Valve manual controls](valve-manual-controls.md).
+See [full behaviour and diagnostics](valve-manual-controls.md).
