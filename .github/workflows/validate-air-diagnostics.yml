@@ -14,6 +14,7 @@ on:
       - custom_components/loxone/air_command_queue.py
       - custom_components/loxone/air_command_queue_core.py
       - tests/test_air_command_queue_core.py
+      - tests/test_air_visualized_controls.py
       - custom_components/loxone/manifest.json
       - tests/test_air_valve_extended.py
   workflow_dispatch:
@@ -32,6 +33,7 @@ jobs:
           set -euo pipefail
           python -m compileall -q custom_components/loxone tests
           python -m unittest discover -s tests -p test_air_command_queue_core.py -v
+          python -m unittest discover -s tests -p test_air_visualized_controls.py -v
           python - <<'PY'
           import ast
           import re
