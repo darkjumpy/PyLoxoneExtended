@@ -3,7 +3,7 @@
 Generic queue keys are (Air serial, entity/parameter key), not just device:
 a future light can independently queue brightness and colour temperature.
 Only Valve Actuator Air / DriveTo is registered as a sender in b5.
-The first successful matching TechReport is a candidate current wake;
+The first successful matching TechReport is treated as a candidate wake.
 
 The wake detector uses a change in WkupCnt[] observed through TechReport.
 Whether this faithfully tracks *natural* wake-ups on every firmware is not
@@ -166,6 +166,16 @@ class AirCommandQueue:
         key = (item.device, item.parameter)
         sender = self._senders.get(key)
         if sender is None:
+            return
+        if time() - item.queued_at >= MAX_PENDING_AGE:
+            if self.pending.ack(item.device, item.parameter, item.revision):
+                self._errors[key] = "Żądanie wygasło przed wysłaniem"
+                self._notify(key)
+                await self._save()
+            return
+        # Do not send a superseded version that was replaced mid-probe.
+        current = self.pending.get(item.device, item.parameter)
+        if current is None or current.revision != item.revision:
             return
         # No two sends of the same parameter in a single observed Air wake.
         if wake is not None:
