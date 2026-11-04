@@ -75,7 +75,8 @@
           "verify_ssl": "Verify the Miniserver TLS certificate",
           "generate_scenes": "Generate scenes",
           "generate_lightcontroller_subcontrols": "Enable LightControllerV2 subcontrols by default",
-          "generate_scenes_delay": "Delay for the scene generation if enabled"
+          "generate_scenes_delay": "Delay for the scene generation if enabled",
+          "enable_air_valve_discovery": "Discover physical Air valve actuators (requires Miniserver program access)"
         },
         "description": "PyLoxone edit settings:",
         "title": "PyLoxone settings"
