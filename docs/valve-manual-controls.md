@@ -62,9 +62,10 @@ When the Air head is paired for battery power (or mode is unknown):
    `TechReport` endpoint approximately every **10 seconds**.
 3. It checks that the returned report belongs to the correct Air serial
    and reads `WkupCnt[]`, a counter reported by the head.
-4. The first observed count establishes a baseline. A **change** from that
-   baseline is treated as a candidate new natural Air wake. Then the
-   integration sends the latest per-entity command **once in that wake**.
+4. The first successful report from the correct head is treated as
+   a **candidate wake** and the latest queued value is sent once.
+   On subsequent reports, a **change** in `WkupCnt[]` indicates the
+   next candidate natural wake.
 5. If Loxone responds `ok`, that command is acknowledged and removed.
    On `timeout`, its setpoint remains pending. It is **not** blindly
    retried in the same observed wake; only a subsequent counter change
@@ -74,8 +75,8 @@ The real head reported `WkupCnt[]`, but **we have not yet proven that
 every natural five-minute polling cycle increments it**, or that a
 10-second report probe will catch the short wake window. Therefore,
 the queue and sensor logic can be tested now, but unattended
-delivery is not yet guaranteed. If `WkupCnt[]` never changes in reports,
-the pending entity will remain on and `DriveTo` will not be sent.
+delivery is not yet guaranteed. If `WkupCnt[]` does not change after
+the initial candidate wake, a timed-out command stays pending.
 
 The documentation from Loxone states that the Miniserver cannot
 immediately wake a sleeping battery device. The `Keep device awake`
