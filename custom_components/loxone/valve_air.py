@@ -197,6 +197,7 @@ _TECH_FIELDS = {
     "DrvBusy": "drive_busy",
     "Error[#]": "error_count",
     "Batt[%]": "battery_level",
+    "WkupCnt[]": "wake_count",
 }
 
 
@@ -229,7 +230,7 @@ def parse_valve_tech_report(report: str) -> dict[str, int | bool | str]:
         if field in ("battery_powered", "valve_busy", "drive_busy"):
             if value in (0, 1):
                 found[field] = bool(value)
-        elif field in ("motor_steps", "start_steps", "max_steps", "error_count"):
+        elif field in ("motor_steps", "start_steps", "max_steps", "error_count", "wake_count"):
             if value >= 0:
                 found[field] = value
         else:
@@ -511,6 +512,7 @@ def parse_drive_to_response(payload: bytes, serial: str, position: int) -> str:
 async def async_drive_to(
     session: ClientSession, config_entry, serial: str, position: float,
     battery_powered: bool | None = None,
+    *, already_probed: bool = False,
 ) -> None:
     """Send one direct 0–100% Air actuator command (experimental).
 
@@ -540,7 +542,7 @@ async def async_drive_to(
     # Keep-device-awake in Loxone Config waits for the next natural wake;
     # its HTTP equivalent is not verified, so we deliberately do not
     # guess a wake command or promise that this probe can wake the device.
-    if battery_powered is not False:
+    if battery_powered is not False and not already_probed:
         tech = await _read_device_shell_report(
             session, config_entry, normalized, "TechReport"
         )
