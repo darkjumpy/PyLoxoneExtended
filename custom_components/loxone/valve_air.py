@@ -34,6 +34,8 @@ _DIGITAL_TYPES = {"LoxAIRsensor", "Online"}
 _VALVE_NAMES = ("siłownik air", "silownik air", "valve", "ventil", "stellantrieb")
 _TEMPERATURE_NAMES = ("temp", "temperatur")
 _BATTERY_NAMES = ("battery", "batterie", "bateria", "akku")
+_RSSI_NAMES = ("rssi", "signal strength", "signalstärke", "signalstarke", "siła sygnału", "sila sygnalu")
+_LINK_NAMES = ("link quality", "linkquality", "lqi", "jakość połączenia", "jakosc polaczenia")
 _POSITION_NAMES = ("siłown", "silown", "valve", "ventil", "stellantrieb")
 
 
@@ -240,6 +242,12 @@ def extract_air_valves(xml: bytes) -> list[AirValveTerminal]:
             elif kind in _ANALOG_TYPES and _name_contains(label, _BATTERY_NAMES):
                 name = "Poziom baterii"
                 category = "battery"
+            elif kind == "LoxAIRAsensor" and _name_contains(label, _RSSI_NAMES):
+                name = "RSSI"
+                category = "rssi"
+            elif kind == "LoxAIRAsensor" and _name_contains(label, _LINK_NAMES):
+                name = "Link Quality"
+                category = "link_quality"
             elif kind == "Online":
                 name = "Online"
                 category = "diagnostic"
@@ -253,6 +261,10 @@ def extract_air_valves(xml: bytes) -> list[AirValveTerminal]:
             if category == "temperature" and unit is None:
                 unit = "°C"
             if category == "battery" and unit is None:
+                unit = "%"
+            if category == "rssi":
+                unit = unit or "dB"
+            if category == "link_quality" and unit is None:
                 unit = "%"
             found.append(
                 AirValveTerminal(
