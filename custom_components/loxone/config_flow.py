@@ -20,12 +20,14 @@ from homeassistant.helpers.selector import (BooleanSelector, NumberSelector,
                                             TextSelectorConfig,
                                             TextSelectorType)
 
-from .const import (CONF_AIR_TERMINAL_POLL_INTERVAL,
+from .const import (CONF_AIR_BUTTON_EVENT_MAP, CONF_AIR_TERMINAL_POLL_INTERVAL,
                     CONF_LIGHTCONTROLLER_SUBCONTROLS_GEN, CONF_SCENE_GEN,
                     CONF_SCENE_GEN_DELAY, CONF_VERIFY_SSL,
                     DEFAULT_AIR_TERMINAL_POLL_INTERVAL, DEFAULT_DELAY_SCENE,
                     DEFAULT_IP, DEFAULT_PORT, DEFAULT_VERIFY_SSL, DOMAIN,
                     MIN_AIR_TERMINAL_POLL_INTERVAL, MAX_AIR_TERMINAL_POLL_INTERVAL)
+
+from .valve_air import parse_air_button_event_map
 
 
 async def validate_loxone_setup(
@@ -66,6 +68,14 @@ async def validate_loxone_setup(
             )
         user_input[CONF_AIR_TERMINAL_POLL_INTERVAL] = int(period)
 
+    if CONF_AIR_BUTTON_EVENT_MAP in user_input:
+        try:
+            parse_air_button_event_map(user_input[CONF_AIR_BUTTON_EVENT_MAP])
+        except ValueError as err:
+            raise SchemaFlowError(
+                "Nieprawidłowe mapowanie Air: SERIAL=UUID, jedna para na wiersz"
+            ) from err
+
     return user_input
 
 
@@ -102,6 +112,11 @@ DATA_SCHEMA_SETUP = vol.Schema(
                 step=1,
             )
         ),
+        vol.Optional(
+            CONF_AIR_BUTTON_EVENT_MAP, default=""
+        ): TextSelector(
+            TextSelectorConfig(type=TextSelectorType.TEXT, multiline=True)
+        ),
     }
 )
 
@@ -137,6 +152,11 @@ DATA_SCHEMA_OPTIONS = vol.Schema(
                 max=MAX_AIR_TERMINAL_POLL_INTERVAL,
                 step=1,
             )
+        ),
+        vol.Optional(
+            CONF_AIR_BUTTON_EVENT_MAP, default=""
+        ): TextSelector(
+            TextSelectorConfig(type=TextSelectorType.TEXT, multiline=True)
         ),
     }
 )
