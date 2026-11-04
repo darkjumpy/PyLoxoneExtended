@@ -56,7 +56,7 @@ class AirVisualizedControlTests(unittest.TestCase):
         self.assertIsNone(match("Dimmer | 504F94FFFEC51AEA | Value"))
         self.assertIsNone(match("HA Valve | 504F94FFFEC51AEA | Color"))
         self.assertIsNone(match("HA Valve | 504F94FFFEC51AEA 504F94FFFEC51B23 | Value"))
-        self.assertIsNone(match("HA Valve | FFFFFFFFEEC51AEA | Value"))
+        self.assertIsNone(match("HA Valve | NOTASERIAL | Value"))
 
     def test_button_titles_have_independent_matching(self):
         match_button = self.api["serial_from_ha_valve_button"]
