@@ -324,6 +324,41 @@ async def _fetch_project(session: ClientSession, config_entry) -> bytes | None:
         return None
 
 
+async def async_restart_valve(session: ClientSession, config_entry, serial: str) -> None:
+    """Request a documented Loxone device restart (NOT a calibration command).
+
+    Loxone says Gen1 performs a calibration run after a restart. Newer
+    generations may differ. Never call this method automatically.
+    """
+    from homeassistant.exceptions import HomeAssistantError
+
+    if not _device_serial(serial):
+        raise HomeAssistantError("Invalid Loxone Air serial; restart aborted")
+    endpoint = _endpoint(config_entry)
+    if endpoint is None:
+        raise HomeAssistantError("Miniserver credentials are missing")
+    base, auth = endpoint
+    try:
+        async with session.get(
+            f"{base}/dev/sys/wsdevice/{serial}/Reboot",
+            auth=auth,
+            timeout=ClientTimeout(total=10),
+            allow_redirects=False,
+        ) as response:
+            if response.status != 200:
+                raise HomeAssistantError(f"Loxone device restart HTTP {response.status}")
+            payload = await response.json(content_type=None)
+            ll = payload.get("LL", {})
+            if str(ll.get("Code", "200")) != "200":
+                raise HomeAssistantError(
+                    f"Loxone device restart code {ll.get('Code')}"
+                )
+    except HomeAssistantError:
+        raise
+    except Exception as err:
+        raise HomeAssistantError("Cannot send restart command to Loxone Air") from err
+
+
 async def async_get_air_valves(hass, miniserver, config_entry) -> list[AirValveTerminal]:
     """Discover automatically once per Miniserver, shared by HA platforms."""
     task = getattr(miniserver, "_air_valve_task", None)
