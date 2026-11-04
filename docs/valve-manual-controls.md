@@ -30,6 +30,45 @@ verified opening of the valve. Its state is unknown until a request is
 submitted or an acknowledged target is restored. The separately exposed
 binary pending sensor distinguishes queue state from acknowledgment.
 
+## DriveTo movement is not a persistent control setpoint
+
+**Observed on a real Valve Actuator Air:** a direct `DriveTo/50` can move
+the actuator, after which it returns to its previous position. The Loxone
+program's analog `Wysterowanie zaworu` output may continue to report 0.
+That output represents the ordinary Loxone control path, not a measurement
+of the motor and not the result of `DriveTo`.
+
+This strongly suggests that regular device control (or the head's normal
+commanded position) supersedes the one-off device-shell movement. An LL
+`value=ok` only acknowledges the shell command; it does **not** mean the
+position was retained. The pending queue intentionally does not send
+recurring commands to fight the standard Loxone controller.
+
+To maintain a valve setpoint, use the ordinary actuator input
+(`0..10` for `0..100%`), with a defined AUTO/manual source selector.
+The HA Virtual Input or an appropriate Loxone program block can supply
+the manual path; this requires explicit configuration and safety review.
+Direct `DriveTo` alone is **not** validated as an exclusive controller.
+Do not rely on it for heating or frost protection.
+
+The read-only `Szacowane otwarcie fizyczne` diagnostic estimates percent
+from raw `Pos` and `MaxPos` only while calibrated and idle. It is
+explicitly a heuristic, not verified motor-position feedback; it is never
+used to command a motor. `Pozycja silnika` and
+`Maksymalna pozycja silnika` expose the raw diagnostic values.
+
+### Physical Air terminal polling
+
+The integration option `Interwał odpytywania fizycznych wejść i czujników Air`
+controls backup HTTP polling of physical analog and digital Air I/O,
+including the head's `Wejście 1` push button. Allowed range **5–600 seconds**,
+default **120 seconds**. When the Miniserver websocket event feed provides
+a terminal's exact UUID, the entity updates immediately instead of
+waiting for backup polling. Some physical terminals may not be published
+over that event feed, so fast polling is only a best effort and may
+still miss short button presses. These settings do not change the device's
+Air radio polling cycle in Loxone Config.
+
 ## Battery Air: latest-value queue and natural wake detection
 
 The `Bezpośrednie otwarcie` slider **enqueues** a target, rather than
