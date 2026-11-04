@@ -52,7 +52,6 @@ class AirValveTerminal:
     battery_powered: bool | None = None
     serial: str | None = None
     manual_value_uuid: str | None = None
-    manual_enable_uuid: str | None = None
 
 
 def _decode_loxcc(data: bytes) -> bytes | None:
@@ -153,31 +152,24 @@ def _device_serial(value: str | None) -> str | None:
     return serial if re.fullmatch(r"[0-9A-F]{12}", serial) else None
 
 
-def _manual_inputs(root: ET.Element, device_name: str) -> tuple[str | None, str | None]:
-    """Find two purpose-made Loxone Virtual Inputs for this named actuator.
+def _direct_target_input(root: ET.Element, device_name: str) -> str | None:
+    """Find a dedicated Loxone VirtualIn for the valve setpoint.
 
-    A pair is required: manual enabled and target. Other inputs, including
-    the room controller output or physical actor terminal, are NEVER a
-    writable target. This avoids fights between HA and Loxone's IRC block.
+    A physical output cannot be written through documented SPS I/O services.
+    The virtual analog input must be connected to the actuator in Loxone
+    Config. A unique exact match is required for safe auto-discovery.
     """
-    target_names = {
-        "value": f"HA Valve | {device_name} | Value".casefold(),
-        "manual": f"HA Valve | {device_name} | Manual".casefold(),
-    }
-    matches: dict[str, list[str]] = {"value": [], "manual": []}
+    expected = f"HA Valve | {device_name} | Value".casefold()
+    matches = []
     for control in root.iter("C"):
         if control.get("Type") != "VirtualIn":
             continue
         title = (control.get("Title") or "").strip().casefold()
         uuid = control.get("U")
         analog = (control.get("Analog") or "false").lower() in ("true", "1")
-        if uuid and title == target_names["value"] and analog:
-            matches["value"].append(uuid)
-        if uuid and title == target_names["manual"] and not analog:
-            matches["manual"].append(uuid)
-    if len(matches["value"]) == 1 and len(matches["manual"]) == 1:
-        return matches["value"][0], matches["manual"][0]
-    return None, None
+        if uuid and title == expected and analog:
+            matches.append(uuid)
+    return matches[0] if len(matches) == 1 else None
 
 
 def _name_contains(name: str, words: tuple[str, ...]) -> bool:
@@ -221,7 +213,7 @@ def extract_air_valves(xml: bytes) -> list[AirValveTerminal]:
             continue
         battery_powered = battery_supply_from_attribute(device.get("Battery"))
         serial = _device_serial(device.get("Serial"))
-        manual_value_uuid, manual_enable_uuid = _manual_inputs(root, title)
+        manual_value_uuid = _direct_target_input(root, title)
         children = list(device.iter("C"))[1:]
         analog_outputs = [el for el in children if el.get("Type") == "LoxAIRAactor"]
         is_valve = _name_contains(title, _VALVE_NAMES) or any(
@@ -270,7 +262,6 @@ def extract_air_valves(xml: bytes) -> list[AirValveTerminal]:
                     battery_powered=battery_powered,
                     serial=serial,
                     manual_value_uuid=manual_value_uuid,
-                    manual_enable_uuid=manual_enable_uuid,
                 )
             )
             seen.add(term_uuid.lower())
