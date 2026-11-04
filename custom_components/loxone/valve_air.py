@@ -147,11 +147,11 @@ def battery_supply_from_attribute(value: str | None) -> bool | None:
 
 
 def _device_serial(value: str | None) -> str | None:
-    """Normalise only a verified 12-digit hexadecimal device serial."""
+    """Normalise verified 6-byte or 8-byte hex Air identifiers for Loxone APIs."""
     if not value:
         return None
     serial = value.replace(":", "").replace("-", "").upper()
-    return serial if re.fullmatch(r"[0-9A-F]{12}", serial) else None
+    return serial if re.fullmatch(r"(?:[0-9A-F]{12}|[0-9A-F]{16})", serial) else None
 
 
 def _direct_target_input(root: ET.Element, device_name: str) -> str | None:
