@@ -137,10 +137,10 @@ async def async_setup_entry(
         ):
             entities.append(LoxonePhysicalAirValveBinarySensor(
                 terminal, config_entry,
-                event_uuids=(
-                set(terminal.event_uuids)
-                | mirrored_events.get(terminal.uuid.lower(), set())
-            ),
+                    event_uuids=(
+                    set(terminal.event_uuids)
+                    | mirrored_events.get(terminal.uuid.lower(), set())
+                ),
             ))
 
     for sensor in get_all(loxconfig, "PresenceDetector"):
@@ -277,9 +277,14 @@ class LoxonePhysicalAirValveBinarySensor(BinarySensorEntity):
             self._config_entry,
             self._terminal.uuid,
         )
-        self._attr_available = value is not None
         if value is not None:
+            self._attr_available = True
             self._attr_is_on = bool(value)
+        elif not self._is_button:
+            # Air input polling may timeout while the head sleeps.
+            # Once we have received a real button event, do not mark
+            # the entity unavailable on an unrelated missed HTTP probe.
+            self._attr_available = False
 
 
 class LoxoneDigitalSensor(LoxoneEntity, BinarySensorEntity):
