@@ -15,6 +15,8 @@ from custom_components.loxone.valve_air import (
     tech_report_confirms_awake,
     parse_device_report_response,
     parse_drive_to_response,
+    estimated_valve_opening,
+    air_terminal_poll_interval,
 )
 
 PROGRAM = b"""<?xml version="1.0"?>
@@ -287,3 +289,37 @@ def test_live_external_supply_is_different_from_project_battery_flag():
     assert parse_valve_tech_report(
         "Serial:504F94FFFE000001;BatteryPowered:1;Batt[%]:100;"
     )["battery_powered"] is True
+
+
+def test_air_terminal_poll_option_validates_range_and_default():
+    assert air_terminal_poll_interval({}) == 120
+    assert air_terminal_poll_interval({"air_terminal_poll_interval": 5}) == 5
+    assert air_terminal_poll_interval({"air_terminal_poll_interval": 600}) == 600
+    assert air_terminal_poll_interval({"air_terminal_poll_interval": 1}) == 120
+    assert air_terminal_poll_interval({"air_terminal_poll_interval": 601}) == 120
+    assert air_terminal_poll_interval({"air_terminal_poll_interval": "nan"}) == 120
+    assert air_terminal_poll_interval({"air_terminal_poll_interval": 7.5}) == 120
+
+
+def test_motor_position_estimate_requires_idle_and_good_reference():
+    idle = {
+        "motor_steps": 0,
+        "max_steps": 2227,
+        "valve_busy": False,
+        "drive_busy": False,
+        "reference_state": "successful",
+        "error_count": 0,
+    }
+    assert estimated_valve_opening(idle) == 100
+    idle["motor_steps"] = 1114
+    assert estimated_valve_opening(idle) == 50
+    idle["motor_steps"] = 2244
+    assert estimated_valve_opening(idle) == 0
+    idle["valve_busy"] = True
+    assert estimated_valve_opening(idle) is None
+    idle["valve_busy"] = False
+    idle["reference_state"] = "unknown"
+    assert estimated_valve_opening(idle) is None
+    idle["reference_state"] = "successful"
+    idle["error_count"] = 1
+    assert estimated_valve_opening(idle) is None
