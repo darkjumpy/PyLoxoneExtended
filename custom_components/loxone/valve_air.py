@@ -1,9 +1,9 @@
-"""Read-only physical Valve Actuator Air discovery for PyLoxone Extended.
+"""Physical Valve Actuator Air discovery and experimental direct control.
 
 LoxAPP3 describes UI controls, not the physical Air/Tree device hierarchy.
-We inspect the currently installed Loxone program and only enumerate physical
-terminals belonging to an identifiable Valve Actuator Air. No valve commands
-are sent. Discovery failures must never prevent ordinary PyLoxone startup.
+We inspect the installed Loxone program and enumerate physical valve heads.
+Discovery is read-only; a separate, explicit HA slider may issue DriveTo
+device-shell commands. Discovery failures must never prevent normal startup.
 
 Protocol investigation inspired by the Apache-2.0 licensed Loxone-Integration
 project by smartmacherei (https://github.com/smartmacherei/Loxone-Integration).
