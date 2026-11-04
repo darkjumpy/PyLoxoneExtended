@@ -24,7 +24,7 @@ b5 DriveTo slider sends commands to the selected physical actuator.
   * Analog actuator output / valve demand (raw 0–10 unless the device's
     Display unit explicitly says otherwise).
   * Battery level (when exposed).
-  * **Power source / Tryb zasilania**: Baterie / Zasilanie zewnętrzne / Nieznane, based on the **Battery** attribute stored on the physical LoxAIRDevice in the pairing program. The value is static until the program changes; it is **NOT** a real-time measurement of supply voltage or proof that the power cable is currently connected.
+  * **Power source / Tryb zasilania**: Baterie / Zasilanie zewnętrzne / Nieznane from the physical head's **TechReport / BatteryPowered**, not the project's potentially outdated Battery flag. Until a valid report is received, this shows **Nieznane**. The project's original `Battery` setting remains available as `configured_battery_mode` in sensor attributes but must not be treated as live physical supply.
   * Online and physical digital input states (when present).
 * Where an already-visualized InfoOnlyAnalog / InfoOnlyDigital control has the
   same physical terminal UUID, it is **reused and grouped** instead of
@@ -61,9 +61,10 @@ network in clear text. This feature now runs automatically, so only install this
 branch on a trusted LAN; prefer TLS where supported.
 Do not expose the Miniserver endpoints to the Internet.
 
-This experimental version uses 120-second polling for new physical terminal
-entities. Battery-powered Air devices generally update at their own configured
-interval (5–20 minutes). Changes may not appear immediately.
+Physical terminal entities use 120-second polling. Diagnostic reports are cached
+for 180 seconds when a head is externally powered and 900 seconds when it is
+battery powered. Physical Air heads can only be contacted when responsive;
+changes may not appear immediately.
 
 ## How to verify
 
