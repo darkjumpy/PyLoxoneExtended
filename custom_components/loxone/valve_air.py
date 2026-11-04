@@ -494,6 +494,7 @@ def parse_drive_to_response(payload: bytes, serial: str, position: int) -> str:
 
 async def async_drive_to(
     session: ClientSession, config_entry, serial: str, position: float,
+    battery_powered: bool | None = None,
 ) -> None:
     """Send one direct 0–100% Air actuator command (experimental).
 
@@ -516,6 +517,31 @@ async def async_drive_to(
         raise HomeAssistantError("Brak danych logowania do Miniservera")
     base, auth = endpoint
     value = int(position)
+
+    # Air heads paired for battery operation cannot always receive direct
+    # shell commands: do NOT interpret "online" as "awake". Probe the
+    # very same head and only send DriveTo if it answers TechReport.
+    # Keep-device-awake in Loxone Config waits for the next natural wake;
+    # its HTTP equivalent is not verified, so we deliberately do not
+    # guess a wake command or promise that this probe can wake the device.
+    if battery_powered is not False:
+        tech = await _read_device_shell_report(
+            session, config_entry, normalized, "TechReport"
+        )
+        if not tech:
+            raise HomeAssistantError(
+                "Głowica Air nie odpowiada (prawdopodobnie śpi). "
+                "Wybudź ją lub wybierz 'Obudź urządzenie' w Loxone Config "
+                "i poczekaj na jej następny cykl. DriveTo NIE zostało wysłane."
+            )
+        match = re.search(
+            r"(?:^|[;\r\n])\s*Serial\s*:\s*([0-9a-fA-F:-]+)", tech
+        )
+        if match is None or _device_serial(match.group(1)) != normalized:
+            raise HomeAssistantError(
+                "Nie udało się potwierdzić tożsamości wybudzonej głowicy Air. "
+                "DriveTo nie zostało wysłane."
+            )
     try:
         async with session.get(
             f"{base}/dev/sys/wsdevice/{normalized}/DriveTo/{value}",
