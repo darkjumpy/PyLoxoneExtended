@@ -3,10 +3,14 @@
     "step": {
       "init": {
         "data": {
-          "air_terminal_poll_interval": "Interwał odpytywania fizycznych wejść i czujników Air (sekundy)"
+          "air_terminal_poll_interval": "Interwał odpytywania fizycznych wejść i czujników Air (sekundy)",
+          "air_button_event_map": "Mapowanie przycisków Air (SERIAL=UUID, po jednym na linię)"
         },
         "title": "Ustawienia PyLoxone Extended",
-        "description": "Interwał 5–600 sekund steruje zapasowym odpytywaniem fizycznych wejść i czujników Air. Zdarzenia Loxone aktualizują stany natychmiast, jeśli są udostępniane przez Miniserver."
+        "description": "Interwał 5–600 sekund steruje zapasowym odpytywaniem fizycznych wejść i czujników Air. Zdarzenia Loxone aktualizują stany natychmiast, jeśli są udostępniane przez Miniserver.",
+        "data_description": {
+          "air_button_event_map": "Wpisz tylko potwierdzone zdarzenia loxone_event, np. 504F94FFFEC51C12=218880fa-014c-59e8-ffff18b999e2bacb. Opcjonalne; inne głowice mogą być rozpoznawane automatycznie z projektu."
+        }
       }
     }
   }
