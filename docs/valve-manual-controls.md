@@ -24,35 +24,79 @@ On the test head, manual commands `DriveTo/1`, `DriveTo/100`, and
 not yet independently verified. Intermediate percentages and long-term
 persistence also need hardware testing.
 
-The entity's state represents the **last acknowledged request sent by
-Home Assistant during the current session**, not the measured or
-independently verified opening of the valve. Its state is unknown
-until an acknowledged command is sent. This is deliberate.
+The entity's state represents the **latest requested target**,
+whether queued or acknowledged, **not** the measured or independently
+verified opening of the valve. Its state is unknown until a request is
+submitted or an acknowledged target is restored. The separately exposed
+binary pending sensor distinguishes queue state from acknowledgment.
 
-## Air battery sleep — critical limitation
+## Battery Air: latest-value queue and natural wake detection
 
-Battery-powered Air heads sleep between communication windows.
-Loxone may respond to an HTTP request with `<LL Code="200"
-value="timeout"/>`. This is **not** a successful movement.
+The `Bezpośrednie otwarcie` slider **enqueues** a target, rather than
+sending an immediate `DriveTo`. The slider displays the **new requested
+target** (assumed state), which must not be confused with physical opening.
 
-Before sending `DriveTo` to a head paired in battery mode or whose
-power mode is unknown, b5 sends `TechReport` and checks that a valid
-response contains the **same physical serial**. If that check fails,
-it blocks `DriveTo`. The check is a *best-effort contact check*:
-Miniserver may serve diagnostic information when a head is sleeping,
-so a successful `TechReport` **does not prove the head is awake**.
-A following `DriveTo` may still time out.
+The linked `binary_sensor.Polecenie oczekuje na wysłanie` reports:
 
-**b5 does not automatically wake up heads.** No verified HTTP equivalent
-for Loxone Config's `Keep device awake` action is known. On battery
-heads, choose that action in Loxone Config and wait for the next Air
-communication cycle, or use the physical wake button. After the device
-is awake, try the slider. No blind retries are performed on a timeout,
-because it is not known whether the actuator will still process the
-command.
+- **on** — a not-yet-acknowledged target remains in the HA queue;
+- **off** — no target pending (acknowledged, expired or never submitted).
 
-The slider rate-limits attempts to at least 15 seconds apart and
-accepts only whole numbers in the range 0–100.
+Entity attributes show `pending_value`, `last_acknowledged_value`,
+`queued_at` and `last_error`. A successful `DriveTo` `ok` response
+clears that specific pending command. A `timeout` keeps it queued.
+
+**The key of every queue is (physical Air serial, entity parameter).**
+When 30% is pending and the setpoint changes to 50%, the **single**
+`valve_position` queue contains 50% only. An acknowledgement of a
+30% command that was already in flight cannot delete the newer 50% request.
+A future device with both `brightness` and `colour_temperature`
+will use two independently coalescing queues; **b5 implements an actual
+sender only for Valve Actuator Air** and does not claim new light controls.
+
+### Natural wake algorithm (experimental; needs live hardware validation)
+
+When the Air head is paired for battery power (or mode is unknown):
+
+1. The integration stores the newest target in Home Assistant storage.
+2. Only while a command is pending, it probes the Miniserver's
+   `TechReport` endpoint approximately every **10 seconds**.
+3. It checks that the returned report belongs to the correct Air serial
+   and reads `WkupCnt[]`, a counter reported by the head.
+4. The first observed count establishes a baseline. A **change** from that
+   baseline is treated as a candidate new natural Air wake. Then the
+   integration sends the latest per-entity command **once in that wake**.
+5. If Loxone responds `ok`, that command is acknowledged and removed.
+   On `timeout`, its setpoint remains pending. It is **not** blindly
+   retried in the same observed wake; only a subsequent counter change
+   permits a further attempt.
+
+The real head reported `WkupCnt[]`, but **we have not yet proven that
+every natural five-minute polling cycle increments it**, or that a
+10-second report probe will catch the short wake window. Therefore,
+the queue and sensor logic can be tested now, but unattended
+delivery is not yet guaranteed. If `WkupCnt[]` never changes in reports,
+the pending entity will remain on and `DriveTo` will not be sent.
+
+The documentation from Loxone states that the Miniserver cannot
+immediately wake a sleeping battery device. The `Keep device awake`
+menu action holds it awake for five minutes **following its next wake**.
+This queue instead waits for a new observed wake; it does not claim
+to have discovered a remote radio wake command.
+
+With the 5-minute Air polling interval used during testing, the
+expected delivery after a detected wake would be approximately one Air
+cycle, but this latency is **not verified** and can be longer.
+
+To prevent a very old request from actuating a valve many hours later,
+a command is retained in the queue for up to **60 minutes** and then
+expires with a diagnostic error. Pending commands are stored locally
+in Home Assistant and restored after HA/reload only while still fresh.
+They are never replayed as a stale full-device event log.
+
+Heads explicitly paired as externally powered skip wake detection and
+send immediately. Any unsuccessful attempt remains pending; on those
+heads, submitting a newer setpoint is the explicit way to request
+another attempt.
 
 ## How replies are handled
 
