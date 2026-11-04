@@ -58,6 +58,30 @@ as an analog terminal. In this case, no signal-quality entity appears
 until the private diagnostics interface is investigated and confirmed.
 To verify RSSI manually, use Loxone Config > Air Diagnostics.
 
+## Real device TechReport
+
+The actuator's Loxone Config "Device details" report exposes
+\`RequestedPercent\`, \`DestinationPercent\`, \`Pos\`, \`StartPos\`, \`MaxPos\`,
+\`BatteryPowered\`, \`RefDriveState\`, \`ValveBusy\`, and \`DrvBusy\`.
+The integration now contains a pure text parser
+(\`parse_valve_tech_report\`) for this report, with tests. It is **not
+automatically polled yet**, because the HTTP/WebSocket path to retrieve
+the report has not been verified against the user's Miniserver.
+
+For externally-powered heads, diagnostic \`Batt[%]:127\` is not a
+battery percentage and must not become a 127% HA sensor. A successful
+\`RefDriveState\` indicates successful reference calibration, while
+\`RequestedPercent\` and \`DestinationPercent\` are reported percentages
+and must not be inferred from the motor's raw step position.
+
+Eight-byte serials (16 hex digits), e.g. \`0123456789ABCDEF\`, are
+accepted in addition to older 6-byte serials.
+
+The \`DriveTo\` device shell command has been confirmed in a real device's
+\`call\` list, but its argument schema, units, and remote invocation
+semantics remain **unverified**. Do not send guessed percentages or
+raw motor step values to this command.
+
 ## Restart vs calibration
 
 A button named **Uruchom ponownie głowicę** is offered if the project
