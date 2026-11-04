@@ -20,10 +20,14 @@ from homeassistant.helpers.selector import (BooleanSelector, NumberSelector,
                                             TextSelectorConfig,
                                             TextSelectorType)
 
-from .const import (CONF_LIGHTCONTROLLER_SUBCONTROLS_GEN, CONF_SCENE_GEN,
+from .const import (CONF_AIR_BUTTON_EVENT_MAP, CONF_AIR_TERMINAL_POLL_INTERVAL,
+                    CONF_LIGHTCONTROLLER_SUBCONTROLS_GEN, CONF_SCENE_GEN,
                     CONF_SCENE_GEN_DELAY, CONF_VERIFY_SSL,
-                    DEFAULT_DELAY_SCENE, DEFAULT_IP, DEFAULT_PORT,
-                    DEFAULT_VERIFY_SSL, DOMAIN)
+                    DEFAULT_AIR_TERMINAL_POLL_INTERVAL, DEFAULT_DELAY_SCENE,
+                    DEFAULT_IP, DEFAULT_PORT, DEFAULT_VERIFY_SSL, DOMAIN,
+                    MIN_AIR_TERMINAL_POLL_INTERVAL, MAX_AIR_TERMINAL_POLL_INTERVAL)
+
+from .valve_air import parse_air_button_event_map
 
 
 async def validate_loxone_setup(
@@ -52,6 +56,25 @@ async def validate_loxone_setup(
         user_input[CONF_PORT] = int(user_input[CONF_PORT])
     if CONF_SCENE_GEN_DELAY in user_input:
         user_input[CONF_SCENE_GEN_DELAY] = int(user_input[CONF_SCENE_GEN_DELAY])
+    if CONF_AIR_TERMINAL_POLL_INTERVAL in user_input:
+        period = float(user_input[CONF_AIR_TERMINAL_POLL_INTERVAL])
+        if (
+            not period.is_integer()
+            or period < MIN_AIR_TERMINAL_POLL_INTERVAL
+            or period > MAX_AIR_TERMINAL_POLL_INTERVAL
+        ):
+            raise SchemaFlowError(
+                "Air poll interval must be a whole number between 5 and 600 seconds"
+            )
+        user_input[CONF_AIR_TERMINAL_POLL_INTERVAL] = int(period)
+
+    if CONF_AIR_BUTTON_EVENT_MAP in user_input:
+        try:
+            parse_air_button_event_map(user_input[CONF_AIR_BUTTON_EVENT_MAP])
+        except ValueError as err:
+            raise SchemaFlowError(
+                "Nieprawidłowe mapowanie Air: SERIAL=UUID, jedna para na wiersz"
+            ) from err
 
     return user_input
 
@@ -78,6 +101,22 @@ DATA_SCHEMA_SETUP = vol.Schema(
         vol.Required(
             CONF_LIGHTCONTROLLER_SUBCONTROLS_GEN, default=False
         ): BooleanSelector(),
+        vol.Optional(
+            CONF_AIR_TERMINAL_POLL_INTERVAL,
+            default=DEFAULT_AIR_TERMINAL_POLL_INTERVAL,
+        ): NumberSelector(
+            NumberSelectorConfig(
+                mode=NumberSelectorMode.BOX,
+                min=MIN_AIR_TERMINAL_POLL_INTERVAL,
+                max=MAX_AIR_TERMINAL_POLL_INTERVAL,
+                step=1,
+            )
+        ),
+        vol.Optional(
+            CONF_AIR_BUTTON_EVENT_MAP, default=""
+        ): TextSelector(
+            TextSelectorConfig(type=TextSelectorType.TEXT, multiline=True)
+        ),
     }
 )
 
@@ -103,6 +142,22 @@ DATA_SCHEMA_OPTIONS = vol.Schema(
         vol.Required(
             CONF_LIGHTCONTROLLER_SUBCONTROLS_GEN, default=False
         ): BooleanSelector(),
+        vol.Optional(
+            CONF_AIR_TERMINAL_POLL_INTERVAL,
+            default=DEFAULT_AIR_TERMINAL_POLL_INTERVAL,
+        ): NumberSelector(
+            NumberSelectorConfig(
+                mode=NumberSelectorMode.BOX,
+                min=MIN_AIR_TERMINAL_POLL_INTERVAL,
+                max=MAX_AIR_TERMINAL_POLL_INTERVAL,
+                step=1,
+            )
+        ),
+        vol.Optional(
+            CONF_AIR_BUTTON_EVENT_MAP, default=""
+        ): TextSelector(
+            TextSelectorConfig(type=TextSelectorType.TEXT, multiline=True)
+        ),
     }
 )
 

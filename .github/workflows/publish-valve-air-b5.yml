@@ -1,0 +1,70 @@
+name: Publish Valve Actuator Air b5 prerelease
+
+on:
+  push:
+    branches: [feature/air-valve-manual-controls]
+    paths:
+      - .github/workflows/publish-valve-air-b5.yml
+
+permissions:
+  contents: write
+
+jobs:
+  publish:
+    if: github.repository == 'darkjumpy/PyLoxoneExtended'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Verify version, syntax, and per-entity queue tests
+        shell: bash
+        run: |
+          set -euo pipefail
+          python - <<'PY'
+          import json
+          from pathlib import Path
+          manifest = json.loads(Path("custom_components/loxone/manifest.json").read_text(encoding="utf-8"))
+          assert manifest["version"] == "2026.11.0b5", manifest["version"]
+          assert Path("docs/release-2026.11.0b5.md").is_file()
+          PY
+          python -m compileall -q custom_components/loxone tests
+          python -m unittest discover -s tests -p test_air_command_queue_core.py -v
+
+      - name: Correct the existing unreleased b5 tag and publish prerelease
+        env:
+          GH_TOKEN: ${{ github.token }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          TAG="2026.11.0b5"
+          OLD_REF="1133d8b3e24c542377d48707ab7a51bea9ab0ffc"
+          if gh release view "$TAG" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
+            echo "::error::A release with tag $TAG already exists. Refusing to overwrite."
+            exit 1
+          fi
+          CURRENT="$(gh api "repos/$GITHUB_REPOSITORY/git/ref/tags/$TAG" --jq '.object.sha')"
+          echo "Existing tag commit: $CURRENT"
+          echo "Validated source commit: $GITHUB_SHA"
+          if [[ "$CURRENT" != "$OLD_REF" && "$CURRENT" != "$GITHUB_SHA" ]]; then
+            echo "::error::Tag moved by another actor; refusing to overwrite $CURRENT"
+            exit 1
+          fi
+          if [[ "$CURRENT" == "$OLD_REF" ]]; then
+            # The existing lightweight b5 tag points to an old b2 commit.
+            # There is no b5 release; move only the known stale tag ref.
+            gh api -X PATCH "repos/$GITHUB_REPOSITORY/git/refs/tags/$TAG" \
+              -f sha="$GITHUB_SHA" -F force=true >/dev/null
+          fi
+          ACTUAL="$(gh api "repos/$GITHUB_REPOSITORY/git/ref/tags/$TAG" --jq '.object.sha')"
+          if [[ "$ACTUAL" != "$GITHUB_SHA" ]]; then
+            echo "::error::Refused to create a mismatched b5 release: $ACTUAL"
+            exit 1
+          fi
+          gh release create "$TAG" \
+            --repo "$GITHUB_REPOSITORY" \
+            --verify-tag \
+            --title "PyLoxone Extended 2026.11.0b5 — Air command queue" \
+            --notes-file docs/release-2026.11.0b5.md \
+            --prerelease \
+            --latest=false
+          gh release view "$TAG" --repo "$GITHUB_REPOSITORY" \
+            --json tagName,isPrerelease,url --jq '{tag: .tagName, prerelease: .isPrerelease, url: .url}'

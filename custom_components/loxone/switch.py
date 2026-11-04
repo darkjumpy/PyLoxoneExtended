@@ -44,7 +44,6 @@ async def async_setup_entry(
     miniserver = get_miniserver_from_hass(hass, config_entry)
     loxconfig = miniserver.lox_config.json
     entities = []
-
     for switch_entity in get_all(loxconfig, ["Switch", "TimedSwitch", "Intercom", "IRoomControllerV2", "LightControllerV2"]):
         switch_entity = add_room_and_cat_to_value_values(loxconfig, switch_entity)
 
@@ -209,7 +208,7 @@ class LoxoneSwitch(LoxoneEntity, SwitchEntity):
 
         self.type = "Switch"
         self._attr_device_info = get_or_create_device(
-            self.unique_id, self.name, self.type, self.room
+            kwargs.get("parent_id") or self.unique_id, self.name, self.type, self.room
         )
 
     @property

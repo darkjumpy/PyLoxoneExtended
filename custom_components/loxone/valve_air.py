@@ -1,9 +1,9 @@
-"""Read-only physical Valve Actuator Air discovery for PyLoxone Extended.
+"""Physical Valve Actuator Air discovery and experimental direct control.
 
 LoxAPP3 describes UI controls, not the physical Air/Tree device hierarchy.
-We inspect the currently installed Loxone program and only enumerate physical
-terminals belonging to an identifiable Valve Actuator Air. No valve commands
-are sent. Discovery failures must never prevent ordinary PyLoxone startup.
+We inspect the installed Loxone program and enumerate physical valve heads.
+Discovery is read-only; a separate, explicit HA slider may issue DriveTo
+device-shell commands. Discovery failures must never prevent normal startup.
 
 Protocol investigation inspired by the Apache-2.0 licensed Loxone-Integration
 project by smartmacherei (https://github.com/smartmacherei/Loxone-Integration).
@@ -12,18 +12,28 @@ This implementation is intentionally limited to Loxone Valve Actuator Air.
 
 from __future__ import annotations
 
+import asyncio
 import io
+import json
 import logging
+import math
 import re
 import struct
 import xml.etree.ElementTree as ET
 import zipfile
 from dataclasses import dataclass
 from urllib.parse import urlsplit
+from time import monotonic
 
 from aiohttp import BasicAuth, ClientSession, ClientTimeout
 from homeassistant.const import CONF_HOST, CONF_PASSWORD, CONF_PORT, CONF_USERNAME
 from homeassistant.helpers.aiohttp_client import async_get_clientsession
+from .const import (
+    CONF_AIR_TERMINAL_POLL_INTERVAL,
+    DEFAULT_AIR_TERMINAL_POLL_INTERVAL,
+    MIN_AIR_TERMINAL_POLL_INTERVAL,
+    MAX_AIR_TERMINAL_POLL_INTERVAL,
+)
 
 _LOGGER = logging.getLogger(__name__)
 MAX_PROGRAM_SIZE = 16 * 1024 * 1024
@@ -33,6 +43,8 @@ _DIGITAL_TYPES = {"LoxAIRsensor", "Online"}
 _VALVE_NAMES = ("siłownik air", "silownik air", "valve", "ventil", "stellantrieb")
 _TEMPERATURE_NAMES = ("temp", "temperatur")
 _BATTERY_NAMES = ("battery", "batterie", "bateria", "akku")
+_RSSI_NAMES = ("rssi", "signal strength", "signalstärke", "signalstarke", "siła sygnału", "sila sygnalu")
+_LINK_NAMES = ("link quality", "linkquality", "lqi", "jakość połączenia", "jakosc polaczenia")
 _POSITION_NAMES = ("siłown", "silown", "valve", "ventil", "stellantrieb")
 
 
@@ -49,6 +61,9 @@ class AirValveTerminal:
     category: str | None = None
     room_uuid: str | None = None
     battery_powered: bool | None = None
+    serial: str | None = None
+    manual_value_uuid: str | None = None
+    event_uuids: tuple[str, ...] = ()
 
 
 def _decode_loxcc(data: bytes) -> bytes | None:
@@ -141,6 +156,301 @@ def battery_supply_from_attribute(value: str | None) -> bool | None:
     return None
 
 
+def _air_device_serial(device: ET.Element) -> str | None:
+    """Resolve an Air head's serial from Loxone's Serial or IPv6 EUI-64 IP.
+
+    Real Loxone project Air devices often have no Serial attribute. Instead
+    they store an uncompressed IPv6 address in IP, e.g.
+    FE80000000000000524F94FFFEC51C12 maps to 504F94FFFEC51C12.
+    IPv6 flips the universal/local bit (0x02) in the first IID octet.
+    Reject malformed, non-link-local, non-EUI-64 and conflicting values.
+    """
+    from ipaddress import IPv6Address, AddressValueError
+
+    direct = _device_serial(device.get("Serial"))
+    raw = (device.get("IP") or "").strip()
+    derived = None
+    if raw:
+        try:
+            ip = IPv6Address(int(raw, 16)) if re.fullmatch(r"[0-9a-fA-F]{32}", raw) else IPv6Address(raw)
+        except (AddressValueError, ValueError):
+            pass
+        else:
+            iid = ip.packed[8:]
+            if ip.is_link_local and iid[3:5] == b"\xFF\xFE":
+                derived = f"{iid[0] ^ 0x02:02X}" + iid[1:].hex().upper()
+                derived = _device_serial(derived)
+    if direct and derived and direct != derived:
+        _LOGGER.warning("Air head serial/IP mismatch; refusing to send device commands")
+        return None
+    return direct or derived
+
+
+def air_terminal_poll_interval(options: dict) -> int:
+    """Return a validated effective Air I/O polling interval in seconds."""
+    raw = options.get(
+        CONF_AIR_TERMINAL_POLL_INTERVAL, DEFAULT_AIR_TERMINAL_POLL_INTERVAL
+    )
+    try:
+        interval = int(raw)
+        if float(raw) != interval:
+            raise ValueError("fractional interval")
+    except (ValueError, TypeError, OverflowError):
+        return DEFAULT_AIR_TERMINAL_POLL_INTERVAL
+    if not MIN_AIR_TERMINAL_POLL_INTERVAL <= interval <= MAX_AIR_TERMINAL_POLL_INTERVAL:
+        return DEFAULT_AIR_TERMINAL_POLL_INTERVAL
+    return interval
+
+
+def valve_output_to_percent(raw: float | None) -> int | None:
+    """Convert the documented raw Loxone Valve Actuator actor 0..10 to 0..100%.
+
+    This is the normal Loxone actor output/demand, NOT measured motor travel.
+    Never guess if a firmware returns a value outside the documented range.
+    """
+    if raw is None or isinstance(raw, bool):
+        return None
+    try:
+        value = float(raw)
+    except (TypeError, ValueError):
+        return None
+    if not math.isfinite(value) or value < 0 or value > 10:
+        return None
+    return min(100, max(0, int(value * 10 + 0.5)))
+
+
+def _device_serial(value: str | None) -> str | None:
+    """Normalise verified 6-byte or 8-byte hex Air identifiers for Loxone APIs."""
+    if not value:
+        return None
+    serial = value.replace(":", "").replace("-", "").upper()
+    return serial if re.fullmatch(r"(?:[0-9A-F]{12}|[0-9A-F]{16})", serial) else None
+
+
+
+def parse_air_button_event_map(raw: str | None) -> dict[str, str]:
+    """Parse explicit physical serial=websocket UUID mappings.
+
+    A user can take a confirmed UUID from HA's loxone_event trace.
+    Mapping is never inferred from event timing (other events may fire).
+    Reject invalid/duplicate bindings rather than risk assigning a
+    different valve's button to the wrong physical device.
+    """
+    entries: dict[str, str] = {}
+    claimed: dict[str, str] = {}
+    if not raw:
+        return entries
+    if not isinstance(raw, str) or len(raw) > 4000:
+        raise ValueError("Air button mapping must be text up to 4000 characters")
+    for line in raw.splitlines():
+        line = line.strip()
+        if not line or line.startswith("#"):
+            continue
+        if "=" not in line:
+            raise ValueError("Expected one SERIAL=UUID mapping per line")
+        serial_text, event_id = (part.strip() for part in line.split("=", 1))
+        serial = _device_serial(serial_text)
+        event_id = event_id.lower()
+        if not serial or not re.fullmatch(
+            r"[0-9a-f]{8}-(?:[0-9a-f]{4}-){3}[0-9a-f]{12}", event_id
+        ):
+            raise ValueError("Invalid Air serial or event UUID")
+        if serial in entries and entries[serial] != event_id:
+            raise ValueError("Conflicting UUIDs for one Air head")
+        if event_id in claimed and claimed[event_id] != serial:
+            raise ValueError("One button event UUID cannot belong to two heads")
+        entries[serial] = event_id
+        claimed[event_id] = serial
+    return entries
+
+
+# Diagnostics reported by ShellSysFuncs/GetLinkQuality (if accessible through API).
+_LINK_FIELDS = {
+    "AvgRssiRx": "rssi_rx",
+    "AvgRssiTx": "rssi_tx",
+    "AvgLqiRx": "lqi_rx",
+    "AvgLqiTx": "lqi_tx",
+    "ErrorRate": "error_rate",
+    "Packets": "packets",
+}
+
+
+def parse_link_quality_report(report: str) -> dict[str, float]:
+    """Parse actual GetLinkQuality monitor output without inventing metrics.
+
+    The command is confirmed in Loxone Config, but no official HTTP/WS
+    endpoint for its structured return value is verified yet.
+    """
+    found: dict[str, float] = {}
+    for match in re.finditer(
+        r"(?:^|[;\r\n])\s*(AvgRssiRx|AvgRssiTx|AvgLqiRx|AvgLqiTx|ErrorRate|Packets)\s*%?\s*:\s*(-?\d+(?:[.,]\d+)?)",
+        report,
+        re.IGNORECASE,
+    ):
+        key = next((dest for src, dest in _LINK_FIELDS.items() if src.casefold() == match.group(1).casefold()), None)
+        if key is not None:
+            found[key] = float(match.group(2).replace(",", "."))
+    return found
+
+
+_TECH_FIELDS = {
+    "RequestedPercent": "requested_percent",
+    "DestinationPercent": "destination_percent",
+    "Pos": "motor_steps",
+    "StartPos": "start_steps",
+    "MaxPos": "max_steps",
+    "BatteryPowered": "battery_powered",
+    "ValveBusy": "valve_busy",
+    "DrvBusy": "drive_busy",
+    "Error[#]": "error_count",
+    "Batt[%]": "battery_level",
+    "WkupCnt[]": "wake_count",
+}
+
+
+def parse_valve_tech_report(report: str) -> dict[str, int | bool | str]:
+    """Parse reported valve status, not an inferred step-to-percent mapping.
+
+    TechReport is confirmed over Miniserver HTTP to return an XML LL value.
+    That does not imply the device's shell accepts writes through this API.
+    """
+    found: dict[str, int | bool | str] = {}
+    for token in re.split(r"[;\r\n]+", report):
+        if ":" not in token:
+            continue
+        name, raw = (part.strip() for part in token.split(":", 1))
+        if name == "RefDriveState":
+            if raw:
+                found["reference_state"] = raw
+            continue
+        field = _TECH_FIELDS.get(name)
+        if field is None:
+            continue
+        try:
+            value = int(raw)
+        except ValueError:
+            continue
+        if field in ("requested_percent", "destination_percent", "battery_level"):
+            # For externally powered heads, Batt[%]:127 is not a real 127%.
+            if not 0 <= value <= 100:
+                continue
+        if field in ("battery_powered", "valve_busy", "drive_busy"):
+            if value in (0, 1):
+                found[field] = bool(value)
+        elif field in ("motor_steps", "start_steps", "max_steps", "error_count", "wake_count"):
+            if value >= 0:
+                found[field] = value
+        else:
+            found[field] = value
+    return found
+
+
+def estimated_valve_opening(values: dict) -> int | None:
+    """Heuristic motor position in %, ONLY for a calibrated idle actuator.
+
+    Real tests of DriveTo/0 and /100 showed Pos near MaxPos (closed)
+    and near zero (open), respectively. It is NOT a verified position
+    sensor and must never be used to send an automatic DriveTo.
+    """
+    position = values.get("motor_steps")
+    limit = values.get("max_steps")
+    if (
+        not isinstance(position, int) or isinstance(position, bool)
+        or not isinstance(limit, int) or isinstance(limit, bool)
+        or limit < 100 or limit > 50000 or position < 0
+        or position > limit * 1.1
+        or str(values.get("reference_state", "")).lower() != "successful"
+        or values.get("valve_busy") is not False
+        or values.get("drive_busy") is not False
+        or values.get("error_count", 0) != 0
+    ):
+        return None
+    return max(0, min(100, int(100 * (limit - position) / limit + 0.5)))
+
+
+def _serial_from_visualization_title(name: str | None, ending: str) -> str | None:
+    """Find exactly one Air serial in an HA Valve visualization title.
+
+    Loxone Config may replace special separators (|) with escaped
+    underscores/backslashes in its visualization. Do not rely on exact
+    punctuation: require a strict HA Valve prefix, suffix and an exact
+    12/16-hex Air serial. Reject ambiguous titles.
+    """
+    if not isinstance(name, str):
+        return None
+    if not re.match(r"^\s*HA\s+Valve\b", name, re.IGNORECASE):
+        return None
+    if not re.search(rf"\b{re.escape(ending)}\s*$", name, re.IGNORECASE):
+        return None
+    matches = re.findall(
+        r"(?<![0-9A-F])(?:[0-9A-F]{16}|[0-9A-F]{12}|(?:[0-9A-F]{2}:){7}[0-9A-F]{2})(?![0-9A-F])",
+        name, re.IGNORECASE,
+    )
+    if len(matches) != 1:
+        return None
+    return _device_serial(matches[0])
+
+
+def serial_from_ha_valve_slider(name: str | None) -> str | None:
+    """Match ordinary HA Valve UI sliders despite rewritten separators."""
+    return _serial_from_visualization_title(name, "Value")
+
+
+def serial_from_ha_valve_button(name: str | None) -> str | None:
+    """Match a visualized physical button mirrored as an info-only control."""
+    return _serial_from_visualization_title(name, "Button")
+
+
+def expected_valve_input_name(serial: str | None, device_name: str) -> str:
+    """Stable operator-facing name for the per-head analog Virtual Input."""
+    normalized = _device_serial(serial)
+    return f"HA Valve | {normalized or device_name} | Value"
+
+
+def _direct_target_input(
+    root: ET.Element, device_name: str, serial: str | None = None,
+) -> str | None:
+    """Discover one verified analog VirtualIn, tolerating escaped names.
+
+    Prefer exact serial-based matches; Loxone sometimes rewrites the pipe
+    separators in the installed project. Do not mistake generic sliders
+    for physical device inputs, or accept duplicate candidate names.
+    """
+    expected = expected_valve_input_name(serial, device_name).casefold()
+    legacy = f"HA Valve | {device_name} | Value".casefold()
+    serial = _device_serial(serial)
+    matches = []
+    for control in root.iter("C"):
+        if control.get("Type") != "VirtualIn":
+            continue
+        title = (control.get("Title") or "").strip()
+        if not title:
+            continue
+        title_serial = serial_from_ha_valve_slider(title)
+        if not (
+            (serial and title_serial == serial)
+            or title.casefold() in (expected, legacy)
+        ):
+            continue
+        uuid = control.get("U")
+        if not uuid:
+            continue
+        if (control.get("Analog") or "").strip().lower() in ("false", "0"):
+            continue
+        if any(
+            (control.get(key) or "").strip().lower() in ("true", "1")
+            for key in ("Digital", "UseAsDigital", "IsDigital")
+        ):
+            continue
+        matches.append(uuid)
+    if len(matches) > 1:
+        _LOGGER.warning(
+            "Multiple HA Valve analog Virtual Inputs match one valve; skipping %s",
+            device_name,
+        )
+    return matches[0] if len(matches) == 1 else None
+
+
 def _name_contains(name: str, words: tuple[str, ...]) -> bool:
     low = name.casefold()
     return any(word in low for word in words)
@@ -181,6 +491,8 @@ def extract_air_valves(xml: bytes) -> list[AirValveTerminal]:
         if not uuid:
             continue
         battery_powered = battery_supply_from_attribute(device.get("Battery"))
+        serial = _air_device_serial(device)
+        manual_value_uuid = _direct_target_input(root, title, serial)
         children = list(device.iter("C"))[1:]
         analog_outputs = [el for el in children if el.get("Type") == "LoxAIRAactor"]
         is_valve = _name_contains(title, _VALVE_NAMES) or any(
@@ -207,6 +519,12 @@ def extract_air_valves(xml: bytes) -> list[AirValveTerminal]:
             elif kind in _ANALOG_TYPES and _name_contains(label, _BATTERY_NAMES):
                 name = "Poziom baterii"
                 category = "battery"
+            elif kind == "LoxAIRAsensor" and _name_contains(label, _RSSI_NAMES):
+                name = "RSSI"
+                category = "rssi"
+            elif kind == "LoxAIRAsensor" and _name_contains(label, _LINK_NAMES):
+                name = "Link Quality"
+                category = "link_quality"
             elif kind == "Online":
                 name = "Online"
                 category = "diagnostic"
@@ -221,12 +539,22 @@ def extract_air_valves(xml: bytes) -> list[AirValveTerminal]:
                 unit = "°C"
             if category == "battery" and unit is None:
                 unit = "%"
+            if category == "rssi":
+                unit = unit or "dB"
             found.append(
                 AirValveTerminal(
                     uuid=term_uuid, device_uuid=uuid, device_name=title or "Valve Actuator Air",
                     name=name, kind="analog" if kind in _ANALOG_TYPES else "digital",
                     unit=unit, category=category, room_uuid=room,
                     battery_powered=battery_powered,
+                    serial=serial,
+                    manual_value_uuid=manual_value_uuid,
+                    event_uuids=tuple(
+                        connector.get("U")
+                        for connector in el.findall("Co")
+                        if (connector.get("K") or "").upper() in ("Q", "QE", "QM")
+                        and connector.get("U")
+                    ),
                 )
             )
             seen.add(term_uuid.lower())
@@ -281,6 +609,290 @@ async def _fetch_project(session: ClientSession, config_entry) -> bytes | None:
         return None
 
 
+async def async_restart_valve(session: ClientSession, config_entry, serial: str) -> None:
+    """Request a documented Loxone device restart (NOT a calibration command).
+
+    Loxone says Gen1 performs a calibration run after a restart. Newer
+    generations may differ. Never call this method automatically.
+    """
+    from homeassistant.exceptions import HomeAssistantError
+
+    if not _device_serial(serial):
+        raise HomeAssistantError("Invalid Loxone Air serial; restart aborted")
+    endpoint = _endpoint(config_entry)
+    if endpoint is None:
+        raise HomeAssistantError("Miniserver credentials are missing")
+    base, auth = endpoint
+    try:
+        async with session.get(
+            f"{base}/dev/sys/wsdevice/{serial}/Reboot",
+            auth=auth,
+            timeout=ClientTimeout(total=10),
+            allow_redirects=False,
+        ) as response:
+            if response.status != 200:
+                raise HomeAssistantError(f"Loxone device restart HTTP {response.status}")
+            content = (await response.text()).strip()
+            if content.startswith("{"):
+                payload = json.loads(content)
+                ll = payload.get("LL", {})
+                code = ll.get("Code")
+            elif content.startswith("<"):
+                root = ET.fromstring(content)
+                result = root if root.tag == "LL" else root.find(".//LL")
+                code = result.get("Code") if result is not None else None
+            else:
+                raise HomeAssistantError("Unrecognized Loxone device restart response")
+            if str(code) != "200":
+                raise HomeAssistantError(
+                    f"Loxone device restart response code {code}"
+                )
+    except HomeAssistantError:
+        raise
+    except Exception as err:
+        raise HomeAssistantError("Cannot send restart command to Loxone Air") from err
+
+
+def tech_report_confirms_awake(report: str | None, serial: str) -> bool:
+    """Require a fresh successful device report for the exact Air serial.
+
+    A matching TechReport is only a momentary readiness check, not a
+    general-purpose wake-up. Reports from other Air heads are rejected.
+    """
+    normalized = _device_serial(serial)
+    if normalized is None or not report:
+        return False
+    match = re.search(
+        r"(?:^|[;\r\n])\s*Serial\s*:\s*([0-9a-fA-F:-]+)",
+        report,
+    )
+    return match is not None and _device_serial(match.group(1)) == normalized
+
+
+def parse_drive_to_response(payload: bytes, serial: str, position: int) -> str:
+    """Parse a write command without treating generic LL Code=200 as success.
+
+    Miniserver returns Code=200 with value='timeout' for sleeping heads.
+    Only a matching control and explicit 'ok' confirm acknowledgement.
+    """
+    from homeassistant.exceptions import HomeAssistantError
+
+    serial = _device_serial(serial)
+    if serial is None:
+        raise HomeAssistantError("Nieprawidłowy identyfikator głowicy Air")
+    expected = f"dev/sys/wsdevice/{serial}/DriveTo/{position}".lower()
+    if len(payload) > 4096:
+        raise HomeAssistantError("Odpowiedź głowicy jest za długa")
+    try:
+        root = ET.fromstring(payload)
+    except ET.ParseError as exc:
+        raise HomeAssistantError("Niepoprawna odpowiedź XML z Miniservera") from exc
+    ll = root if root.tag == "LL" else root.find(".//LL")
+    if ll is None:
+        raise HomeAssistantError("Brak odpowiedzi LL z Miniservera")
+    control = ll.get("control", "").lower()
+    if control != expected:
+        raise HomeAssistantError("Odpowiedź dotyczy innej komendy niż DriveTo")
+    if ll.get("Code") != "200":
+        raise HomeAssistantError("Miniserver odrzucił polecenie DriveTo")
+    result = (ll.get("value") or "").strip().lower()
+    if result == "ok":
+        return "ok"
+    if result == "timeout":
+        raise HomeAssistantError(
+            "Brak potwierdzenia DriveTo — głowica może spać. "
+            "Polecenie mogło zostać przyjęte; nie ponawiaj automatycznie."
+        )
+    raise HomeAssistantError(
+        "Niepotwierdzona odpowiedź na DriveTo; sprawdź pozycję głowicy"
+    )
+
+
+async def async_drive_to(
+    session: ClientSession, config_entry, serial: str, position: float,
+    battery_powered: bool | None = None,
+    *, already_probed: bool = False,
+) -> None:
+    """Send one direct 0–100% Air actuator command (experimental).
+
+    Three real-device test values (0, 1 and 100) suggest percent semantics,
+    but no intermediate value or long-term behaviour has been verified.
+    """
+    from homeassistant.exceptions import HomeAssistantError
+
+    normalized = _device_serial(serial)
+    if normalized is None:
+        raise HomeAssistantError("Nieprawidłowy identyfikator głowicy Air")
+    if (
+        isinstance(position, bool) or not isinstance(position, (int, float))
+        or not math.isfinite(position)
+        or position != int(position) or not 0 <= position <= 100
+    ):
+        raise HomeAssistantError("DriveTo przyjmuje tylko całkowite procenty 0–100")
+    endpoint = _endpoint(config_entry)
+    if endpoint is None:
+        raise HomeAssistantError("Brak danych logowania do Miniservera")
+    base, auth = endpoint
+    value = int(position)
+
+    # Air heads paired for battery operation cannot always receive direct
+    # shell commands: do NOT interpret "online" as "awake". Probe the
+    # very same head and only send DriveTo if it answers TechReport.
+    # Keep-device-awake in Loxone Config waits for the next natural wake;
+    # its HTTP equivalent is not verified, so we deliberately do not
+    # guess a wake command or promise that this probe can wake the device.
+    if battery_powered is not False and not already_probed:
+        tech = await _read_device_shell_report(
+            session, config_entry, normalized, "TechReport"
+        )
+        if not tech:
+            raise HomeAssistantError(
+                "Głowica Air nie odpowiada (prawdopodobnie śpi). "
+                "Wybudź ją lub wybierz 'Obudź urządzenie' w Loxone Config "
+                "i poczekaj na jej następny cykl. DriveTo NIE zostało wysłane."
+            )
+        if not tech_report_confirms_awake(tech, normalized):
+            raise HomeAssistantError(
+                "Nie udało się potwierdzić tożsamości wybudzonej głowicy Air. "
+                "DriveTo nie zostało wysłane."
+            )
+    try:
+        async with session.get(
+            f"{base}/dev/sys/wsdevice/{normalized}/DriveTo/{value}",
+            auth=auth,
+            timeout=ClientTimeout(total=15),
+            allow_redirects=False,
+        ) as response:
+            if response.status != 200:
+                raise HomeAssistantError(
+                    f"Polecenie DriveTo zwróciło błąd HTTP {response.status}"
+                )
+            raw = await response.content.read(4097)
+            parse_drive_to_response(raw, normalized, value)
+    except HomeAssistantError:
+        raise
+    except Exception as exc:
+        raise HomeAssistantError(
+            "Nie udało się potwierdzić DriveTo; nie ponawiaj automatycznie"
+        ) from exc
+
+
+def parse_device_report_response(payload: bytes) -> str | None:
+    """Return the content of a successful Loxone LL XML diagnostic response."""
+    if len(payload) > 65536:
+        return None
+    try:
+        root = ET.fromstring(payload)
+    except ET.ParseError:
+        return None
+    ll = root if root.tag == "LL" else root.find(".//LL")
+    if ll is None or str(ll.get("Code")) != "200":
+        return None
+    return ll.get("value")
+
+
+async def _read_device_shell_report(
+    session: ClientSession, config_entry, serial: str, command: str,
+    *, request_timeout: float = 12,
+) -> str | None:
+    """Read a validated diagnostic shell command from the Miniserver.
+
+    The user confirmed this path and an XML LL response for TechReport.
+    GetLinkQuality is a best-effort read-only probe: availability depends
+    on firmware and Miniserver permissions.
+    """
+    if command not in ("TechReport", "GetLinkQuality"):
+        return None
+    serial = _device_serial(serial)
+    endpoint = _endpoint(config_entry)
+    if serial is None or endpoint is None:
+        return None
+    base, auth = endpoint
+    try:
+        async with session.get(
+            f"{base}/dev/sys/wsdevice/{serial}/{command}",
+            auth=auth,
+            timeout=ClientTimeout(total=request_timeout),
+            allow_redirects=False,
+        ) as response:
+            if response.status != 200:
+                _LOGGER.debug("Valve %s HTTP %s", command, response.status)
+                return None
+            # Never store or emit full device logs or private serial numbers.
+            payload = await response.content.read(65537)
+            if len(payload) > 65536:
+                return None
+        return parse_device_report_response(payload)
+    except (OSError, ValueError, ET.ParseError) as err:
+        _LOGGER.debug("Valve diagnostic %s unavailable: %s", command, type(err).__name__)
+        return None
+    except Exception as err:  # noqa: BLE001 - optional diagnostics
+        _LOGGER.debug("Valve diagnostic %s unavailable: %s", command, type(err).__name__)
+        return None
+
+
+async def async_get_valve_diagnostics(
+    hass, miniserver, config_entry, serial: str | None, battery_powered: bool | None,
+) -> dict[str, int | float | bool | str]:
+    """Share one poll among all sensors on one physical Air valve.
+
+    The Miniserver, not the Air head, is polled. Battery-operated devices
+    are polled less often to avoid unnecessary traffic and wake-ups.
+    """
+    normalized = _device_serial(serial)
+    if normalized is None:
+        return {}
+    cache = getattr(miniserver, "_air_valve_diagnostic_cache", None)
+    if cache is None:
+        cache = {}
+        miniserver._air_valve_diagnostic_cache = cache
+    now = monotonic()
+    interval = 900 if battery_powered is True else 180
+    cached = cache.get(normalized)
+    # The pairing project's Battery flag may be stale after external 24 V
+    # is connected. Once TechReport confirms physical power, let the live
+    # BatteryPowered value determine subsequent diagnostic polling.
+    if cached is not None and cached[1].done() and not cached[1].cancelled():
+        try:
+            measured_battery = cached[1].result().get("battery_powered")
+        except Exception:  # noqa: BLE001 - a failed optional poll should recover
+            measured_battery = None
+        if isinstance(measured_battery, bool):
+            interval = 900 if measured_battery else 180
+    if cached is not None and now - cached[0] < interval:
+        return await cached[1]
+
+    async def load() -> dict[str, int | float | bool | str]:
+        session = async_get_clientsession(hass)
+        tech, link = await asyncio.gather(
+            _read_device_shell_report(session, config_entry, normalized, "TechReport"),
+            _read_device_shell_report(session, config_entry, normalized, "GetLinkQuality"),
+        )
+        if tech:
+            reported = re.search(r"(?:^|[;\r\n])\s*Serial:\s*([0-9a-fA-F:-]+)", tech)
+            if reported and _device_serial(reported.group(1)) != normalized:
+                _LOGGER.debug("Valve TechReport serial differs from device; skipping")
+                tech = None
+        values: dict[str, int | float | bool | str] = (
+            parse_valve_tech_report(tech) if tech else {}
+        )
+        estimate = estimated_valve_opening(values)
+        if estimate is not None:
+            values["estimated_opening"] = estimate
+        if link:
+            # Avoid attributing Air Base RSSI/LQI to a specific head.
+            match = re.search(r"(?:^|[;\r\n])\s*Target\s*:\s*([0-9a-fA-F:-]+)", link)
+            if match is None or _device_serial(match.group(1)) == normalized:
+                values.update(parse_link_quality_report(link))
+            else:
+                _LOGGER.debug("Valve link report target differs from device; skipping")
+        return values
+
+    task = hass.async_create_task(load(), name="loxone air valve diagnostics")
+    cache[normalized] = (now, task)
+    return await task
+
+
 async def async_get_air_valves(hass, miniserver, config_entry) -> list[AirValveTerminal]:
     """Discover automatically once per Miniserver, shared by HA platforms."""
     task = getattr(miniserver, "_air_valve_task", None)
@@ -324,6 +936,51 @@ def linked_terminal_ids(config: dict) -> set[str]:
 
     walk(config.get("controls") or {})
     return known
+
+
+async def async_set_valve_virtual_input(
+    session: ClientSession, config_entry, uuid: str, raw_value: float,
+) -> float:
+    """Set an existing, explicitly configured analog Virtual Input (0..10).
+
+    Never send a command to the hardware Air device. Only the specified
+    VirtualIn UUID in the installed Loxone program is written.
+    """
+    from homeassistant.exceptions import HomeAssistantError
+    from urllib.parse import quote
+
+    if (
+        not uuid or isinstance(raw_value, bool)
+        or not isinstance(raw_value, (float, int))
+        or not math.isfinite(raw_value)
+        or raw_value < 0 or raw_value > 10
+    ):
+        raise HomeAssistantError("Nieprawidłowa wartość wejścia wirtualnego 0–10")
+    endpoint = _endpoint(config_entry)
+    if endpoint is None:
+        raise HomeAssistantError("Brak poprawnych danych połączenia do Miniservera")
+    base, auth = endpoint
+    # One decimal place, so 65% -> 6.5 and the exact output is predictable.
+    command = f"{float(raw_value):.1f}"
+    try:
+        async with session.get(
+            f"{base}/jdev/sps/io/{quote(uuid, safe='-')}/{command}",
+            auth=auth, timeout=ClientTimeout(total=9),
+            allow_redirects=False,
+        ) as response:
+            if response.status != 200:
+                raise HomeAssistantError(f"Miniserver zwrócił HTTP {response.status}")
+            reply = await response.json(content_type=None)
+        ll = reply.get("LL") if isinstance(reply, dict) else None
+        if not isinstance(ll, dict) or str(ll.get("Code")) != "200":
+            raise HomeAssistantError("Miniserver nie potwierdził wartości wejścia wirtualnego")
+        return float(raw_value)
+    except HomeAssistantError:
+        raise
+    except Exception as exc:
+        raise HomeAssistantError(
+            "Nie udało się potwierdzić ustawienia wirtualnego wejścia Loxone"
+        ) from exc
 
 
 async def async_read_terminal(session: ClientSession, config_entry, uuid: str) -> float | None:

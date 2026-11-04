@@ -30,6 +30,8 @@ from homeassistant.setup import async_setup_component
 
 from .const import (ATTR_AREA_CREATE, ATTR_CODE, ATTR_COMMAND, ATTR_DEVICE,
                     ATTR_UUID, ATTR_VALUE,
+                    CONF_AIR_BUTTON_EVENT_MAP,
+                    CONF_AIR_TERMINAL_POLL_INTERVAL, DEFAULT_AIR_TERMINAL_POLL_INTERVAL,
                     CONF_LIGHTCONTROLLER_SUBCONTROLS_GEN, CONF_SCENE_GEN,
                     CONF_SCENE_GEN_DELAY, CONF_VERIFY_SSL, DEFAULT,
                     DEFAULT_DELAY_SCENE, DEFAULT_PORT, DEFAULT_VERIFY_SSL,
@@ -303,6 +305,23 @@ async def async_unload_entry(hass, config_entry):
                 )
         coordinator._listening_task = None
 
+        # Cancel background Air delivery workers on integration reload/unload.
+        # Pending setpoints are preserved by the queue in HA storage.
+        queue_task = getattr(
+            getattr(coordinator, "miniserver", None),
+            "_air_command_queue_task", None,
+        )
+        if queue_task is not None:
+            try:
+                queue = await queue_task
+                await queue.async_stop()
+            except asyncio.CancelledError:
+                pass
+            except Exception as err:  # noqa: BLE001
+                _LOGGER.warning(
+                    "Failed to stop Loxone Air delivery queue: %s", err
+                )
+
         try:
             await coordinator.async_cleanup()
         except Exception as err:  # noqa: BLE001
@@ -400,6 +419,12 @@ async def async_set_options(hass, config_entry):
         CONF_SCENE_GEN_DELAY: options_in.pop(CONF_SCENE_GEN_DELAY, DEFAULT_DELAY_SCENE),
         CONF_LIGHTCONTROLLER_SUBCONTROLS_GEN: options_in.pop(
             CONF_LIGHTCONTROLLER_SUBCONTROLS_GEN, ""
+        ),
+        CONF_AIR_TERMINAL_POLL_INTERVAL: options_in.pop(
+            CONF_AIR_TERMINAL_POLL_INTERVAL, DEFAULT_AIR_TERMINAL_POLL_INTERVAL
+        ),
+        CONF_AIR_BUTTON_EVENT_MAP: options_in.pop(
+            CONF_AIR_BUTTON_EVENT_MAP, ""
         ),
     }
     hass.config_entries.async_update_entry(
