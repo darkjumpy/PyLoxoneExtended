@@ -31,10 +31,10 @@ MAX_PROGRAM_SIZE = 16 * 1024 * 1024
 
 _ANALOG_TYPES = {"LoxAIRAsensor", "LoxAIRAactor"}
 _DIGITAL_TYPES = {"LoxAIRsensor", "Online"}
-_VALVE_NAMES = ("siłown", "silown", "valve", "ventil", "actuator", "stellantrieb")
+_VALVE_NAMES = ("siłownik air", "silownik air", "valve", "ventil", "stellantrieb")
 _TEMPERATURE_NAMES = ("temp", "temperatur")
 _BATTERY_NAMES = ("battery", "batterie", "bateria", "akku")
-_POSITION_NAMES = ("siłown", "silown", "valve", "ventil", "actuator", "position", "stellung")
+_POSITION_NAMES = ("siłown", "silown", "valve", "ventil", "stellantrieb")
 
 
 @dataclass(frozen=True)
