@@ -183,6 +183,55 @@ def parse_link_quality_report(report: str) -> dict[str, float]:
     return found
 
 
+_TECH_FIELDS = {
+    "RequestedPercent": "requested_percent",
+    "DestinationPercent": "destination_percent",
+    "Pos": "motor_steps",
+    "StartPos": "start_steps",
+    "MaxPos": "max_steps",
+    "BatteryPowered": "battery_powered",
+    "ValveBusy": "valve_busy",
+    "DrvBusy": "drive_busy",
+    "Error[#]": "error_count",
+    "Batt[%]": "battery_level",
+}
+
+
+def parse_valve_tech_report(report: str) -> dict[str, int | bool | str]:
+    """Parse reported valve status, not an inferred step-to-percent mapping.
+
+    TechReport is confirmed in Loxone Config. Fetching it over Miniserver
+    HTTP/WS is not yet verified. Do not assume a write-capable device API.
+    """
+    found: dict[str, int | bool | str] = {}
+    for match in re.finditer(r"(?m)^\s*([^:\r\n]+):\s*([^;\r\n]+)", report):
+        name, raw = match.group(1).strip(), match.group(2).strip()
+        if name == "RefDriveState":
+            if raw:
+                found["reference_state"] = raw
+            continue
+        field = _TECH_FIELDS.get(name)
+        if field is None:
+            continue
+        try:
+            value = int(raw)
+        except ValueError:
+            continue
+        if field in ("requested_percent", "destination_percent", "battery_level"):
+            # For externally powered heads, Batt[%]:127 is not a real 127%.
+            if not 0 <= value <= 100:
+                continue
+        if field in ("battery_powered", "valve_busy", "drive_busy"):
+            if value in (0, 1):
+                found[field] = bool(value)
+        elif field in ("motor_steps", "start_steps", "max_steps", "error_count"):
+            if value >= 0:
+                found[field] = value
+        else:
+            found[field] = value
+    return found
+
+
 def _direct_target_input(root: ET.Element, device_name: str) -> str | None:
     """Find a dedicated Loxone VirtualIn for the valve setpoint.
 
