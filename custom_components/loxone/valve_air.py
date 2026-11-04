@@ -307,6 +307,29 @@ def parse_valve_tech_report(report: str) -> dict[str, int | bool | str]:
     return found
 
 
+def estimated_valve_opening(values: dict) -> int | None:
+    """Heuristic motor position in %, ONLY for a calibrated idle actuator.
+
+    Real tests of DriveTo/0 and /100 showed Pos near MaxPos (closed)
+    and near zero (open), respectively. It is NOT a verified position
+    sensor and must never be used to send an automatic DriveTo.
+    """
+    position = values.get("motor_steps")
+    limit = values.get("max_steps")
+    if (
+        not isinstance(position, int) or isinstance(position, bool)
+        or not isinstance(limit, int) or isinstance(limit, bool)
+        or limit < 100 or limit > 50000 or position < 0
+        or position > limit * 1.1
+        or str(values.get("reference_state", "")).lower() != "successful"
+        or values.get("valve_busy") is not False
+        or values.get("drive_busy") is not False
+        or values.get("error_count", 0) != 0
+    ):
+        return None
+    return max(0, min(100, int(100 * (limit - position) / limit + 0.5)))
+
+
 def _direct_target_input(root: ET.Element, device_name: str) -> str | None:
     """Find a dedicated Loxone VirtualIn for the valve setpoint.
 
@@ -746,6 +769,9 @@ async def async_get_valve_diagnostics(
         values: dict[str, int | float | bool | str] = (
             parse_valve_tech_report(tech) if tech else {}
         )
+        estimate = estimated_valve_opening(values)
+        if estimate is not None:
+            values["estimated_opening"] = estimate
         if link:
             # Avoid attributing Air Base RSSI/LQI to a specific head.
             match = re.search(r"(?:^|[;\r\n])\s*Target\s*:\s*([0-9a-fA-F:-]+)", link)
