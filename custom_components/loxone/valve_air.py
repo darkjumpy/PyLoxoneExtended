@@ -594,6 +594,7 @@ def parse_device_report_response(payload: bytes) -> str | None:
 
 async def _read_device_shell_report(
     session: ClientSession, config_entry, serial: str, command: str,
+    *, request_timeout: float = 12,
 ) -> str | None:
     """Read a validated diagnostic shell command from the Miniserver.
 
@@ -612,7 +613,7 @@ async def _read_device_shell_report(
         async with session.get(
             f"{base}/dev/sys/wsdevice/{serial}/{command}",
             auth=auth,
-            timeout=ClientTimeout(total=12),
+            timeout=ClientTimeout(total=request_timeout),
             allow_redirects=False,
         ) as response:
             if response.status != 200:
