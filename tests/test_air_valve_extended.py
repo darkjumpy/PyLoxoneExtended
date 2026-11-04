@@ -9,6 +9,7 @@ from custom_components.loxone.valve_air import (
     linked_terminal_ids,
     _direct_target_input,
     _device_serial,
+    _air_device_serial,
     parse_link_quality_report,
     parse_valve_tech_report,
     tech_report_confirms_awake,
@@ -234,3 +235,55 @@ def test_wake_count_from_real_air_tech_report():
     report = "Serial:0123456789ABCDEF;WkupCnt[]:18;BatteryPowered:1;"
     assert parse_valve_tech_report(report)["wake_count"] == 18
     assert parse_valve_tech_report("WkupCnt[]:not-a-number") == {}
+
+
+
+def test_air_serial_from_real_config_ip_eui64():
+    # Real Loxone programs frequently place Air serial in IP, not Serial.
+    # This is a synthetic public EUI-64 example, not a private hardware ID.
+    ip_program = b'''<Loxone>
+      <C Type="LoxAIRDevice" U="head-battery" Title="Valve Actuator Air WC"
+         IP="FE80000000000000524F94FFFE000001" Battery="true">
+        <C Type="LoxAIRAactor" U="battery-output" Title="Valve"/>
+        <C Type="Online" U="battery-online"/>
+      </C>
+      <C Type="LoxAIRDevice" U="head-powered" Title="Valve Actuator Air Salon"
+         IP="fe80:0000:0000:0000:524f:94ff:fe00:0002" Battery="true">
+        <C Type="LoxAIRAactor" U="powered-output" Title="Valve"/>
+      </C>
+    </Loxone>'''
+    heads = extract_air_valves(ip_program)
+    assert {t.device_uuid for t in heads} == {"head-battery", "head-powered"}
+    assert all(t.serial == "504F94FFFE000001" for t in heads if t.device_uuid == "head-battery")
+    assert all(t.serial == "504F94FFFE000002" for t in heads if t.device_uuid == "head-powered")
+    # The project attribute is NOT proof of actual current power.
+    assert all(t.battery_powered is True for t in heads)
+
+
+def test_air_serial_rejects_malformed_or_conflicting_project_fields():
+    from xml.etree import ElementTree as ET
+
+    def serial_of(attributes):
+        return _air_device_serial(ET.Element("C", attributes))
+
+    assert serial_of({"Serial": "50:4F:94:FF:FE:00:00:01"}) == "504F94FFFE000001"
+    assert serial_of({"IP": "FE80000000000000524F94FFFE000001"}) == "504F94FFFE000001"
+    assert serial_of({"IP": "FE80000000000000524F94FFFE000001",
+                      "Serial": "504F94FFFE000001"}) == "504F94FFFE000001"
+    assert serial_of({"IP": "FE80000000000000524F94FFFE000001",
+                      "Serial": "504F94FFFE000002"}) is None
+    assert serial_of({"IP": "192.168.2.253"}) is None
+    assert serial_of({"IP": "FE80000000000000524F94FFFEXXXXXX"}) is None
+    assert serial_of({"IP": "20010DB800000000524F94FFFE000001"}) is None
+    assert serial_of({"IP": "FE800000000000000000000000000001"}) is None
+
+
+def test_live_external_supply_is_different_from_project_battery_flag():
+    # For a head physically connected to external power, this live value
+    # must override an outdated project pairing hint.
+    assert parse_valve_tech_report(
+        "Serial:504F94FFFE000002;BatteryPowered:0;Batt[%]:127;"
+    )["battery_powered"] is False
+    assert parse_valve_tech_report(
+        "Serial:504F94FFFE000001;BatteryPowered:1;Batt[%]:100;"
+    )["battery_powered"] is True
