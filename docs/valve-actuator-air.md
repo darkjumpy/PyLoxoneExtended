@@ -1,7 +1,7 @@
 # Valve Actuator Air — experimental physical devices
 
 This is the next feature of PyLoxoneExtended, extending **existing Loxone
-integration**. It is intentionally read-only and **automatically enabled on integration startup**.
+integration**. Physical discovery and the terminal sensors are read-only and **automatically enabled on integration startup**. An additional, experimental direct DriveTo slider is available for eligible heads in b5.
 
 ## Why a separate discovery step?
 
@@ -13,7 +13,8 @@ the Miniserver does.
 We read the latest installed sps_*.LoxCC or sps_*.zip **only once per
 integration load** (from /dev/fslist/prog, /dev/fsget/prog/...) and look for
 LoxAIRDevice containers with recognizable Valve Actuator names. Terminal
-values are read from /jdev/sps/io/<terminal-uuid>, no write endpoints.
+values are read from /jdev/sps/io/<terminal-uuid>. Only the separate explicit
+b5 DriveTo slider sends commands to the selected physical actuator.
 
 ## What it creates
 
@@ -37,11 +38,12 @@ available; the analog output reports the commanded position.
 
 ## Manual position and device restart
 
-An additional experimental implementation for manual 0–100% position control
-and an explicit actuator restart button is described in
-[Valve manual controls](valve-manual-controls.md). It requires two Loxone
-Virtual Inputs and safe AUTO/manual selection logic; a verified dedicated
-calibration API command is not yet available.
+An experimental **direct DriveTo** 0–100% slider and an actuator restart
+button are described in [Valve manual controls](valve-manual-controls.md).
+No Virtual Inputs are required. For battery heads, command delivery is not
+reliable while asleep; b5 does **not** implement remote automatic wake-up.
+The position slider shows the last acknowledged request, not a measured
+motor position. A verified dedicated calibration API is still unavailable.
 
 ## Automatic discovery
 
@@ -84,8 +86,9 @@ logger:
     custom_components.loxone.valve_air: debug
 \`\`\`
 
-The detected project hierarchy is firmware-dependent, and is **not yet
-validated against a real installation with Valve Actuator Air**. Please send
+Physical DriveTo control was exercised on one real HW3 battery Air head;
+project hierarchy parsing and end-to-end HA behavior still require
+validation on the user's installed Miniserver and HA. Please send
 redacted diagnostics or a sanitized relevant excerpt from a local Loxone
 project rather than full credentials or a public copy of your project.
 
