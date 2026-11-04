@@ -63,6 +63,7 @@ class AirValveTerminal:
     battery_powered: bool | None = None
     serial: str | None = None
     manual_value_uuid: str | None = None
+    event_uuids: tuple[str, ...] = ()
 
 
 def _decode_loxcc(data: bytes) -> bytes | None:
@@ -224,6 +225,43 @@ def _device_serial(value: str | None) -> str | None:
         return None
     serial = value.replace(":", "").replace("-", "").upper()
     return serial if re.fullmatch(r"(?:[0-9A-F]{12}|[0-9A-F]{16})", serial) else None
+
+
+
+def parse_air_button_event_map(raw: str | None) -> dict[str, str]:
+    """Parse explicit physical serial=websocket UUID mappings.
+
+    A user can take a confirmed UUID from HA's loxone_event trace.
+    Mapping is never inferred from event timing (other events may fire).
+    Reject invalid/duplicate bindings rather than risk assigning a
+    different valve's button to the wrong physical device.
+    """
+    entries: dict[str, str] = {}
+    claimed: dict[str, str] = {}
+    if not raw:
+        return entries
+    if not isinstance(raw, str) or len(raw) > 4000:
+        raise ValueError("Air button mapping must be text up to 4000 characters")
+    for line in raw.splitlines():
+        line = line.strip()
+        if not line or line.startswith("#"):
+            continue
+        if "=" not in line:
+            raise ValueError("Expected one SERIAL=UUID mapping per line")
+        serial_text, event_id = (part.strip() for part in line.split("=", 1))
+        serial = _device_serial(serial_text)
+        event_id = event_id.lower()
+        if not serial or not re.fullmatch(
+            r"[0-9a-f]{8}-(?:[0-9a-f]{4}-){3}[0-9a-f]{12}", event_id
+        ):
+            raise ValueError("Invalid Air serial or event UUID")
+        if serial in entries and entries[serial] != event_id:
+            raise ValueError("Conflicting UUIDs for one Air head")
+        if event_id in claimed and claimed[event_id] != serial:
+            raise ValueError("One button event UUID cannot belong to two heads")
+        entries[serial] = event_id
+        claimed[event_id] = serial
+    return entries
 
 
 # Diagnostics reported by ShellSysFuncs/GetLinkQuality (if accessible through API).
@@ -511,6 +549,12 @@ def extract_air_valves(xml: bytes) -> list[AirValveTerminal]:
                     battery_powered=battery_powered,
                     serial=serial,
                     manual_value_uuid=manual_value_uuid,
+                    event_uuids=tuple(
+                        connector.get("U")
+                        for connector in el.findall("Co")
+                        if (connector.get("K") or "").upper() in ("Q", "QE", "QM")
+                        and connector.get("U")
+                    ),
                 )
             )
             seen.add(term_uuid.lower())
