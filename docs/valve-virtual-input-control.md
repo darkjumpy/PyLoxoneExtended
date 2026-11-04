@@ -123,6 +123,39 @@ not expose an event, no HA-side polling setting can guarantee catching
 the short electrical pulse. Do not use a polling-only binary entity as
 a safety-critical press trigger.
 
+## Confirmed WebSocket button event mapping
+
+An actual press of the WC upstairs Air button was confirmed to produce
+`loxone_event` with a digital value `1`, but the key was different
+from the physical input entity's UUID. When this happens, the
+integration can bind one **verified** event UUID to one physical head,
+without touching Loxone Config or affecting the valve setpoint.
+
+In **Home Assistant → Settings → Devices & services → PyLoxone Extended
+→ Configure**, locate **Mapowanie przycisków Air** and enter one pair
+per line:
+
+```text
+<FULL_12_OR_16_HEX_AIR_SERIAL>=<LOXONE_EVENT_UUID>
+```
+
+The serial belongs to the physical Air head (for example, its
+`TechReport Serial`). The UUID is the event key captured at
+**Developer Tools → Events → loxone_event** when pressing that
+head's button. Only use an event you verified by pressing that exact
+device. Save options; the integration reloads and attaches this UUID
+to the physical **Wejście 1** entity.
+
+No guessing based on timing: the mapping rejects invalid or
+ambiguous serials/UUIDs and never assigns one event UUID to multiple
+physical heads. The mapping is optional for devices whose physical
+input connector UUID is already exposed in the Loxone project.
+
+After reloading, check the **Wejście 1** attributes
+`event_uuids`, `last_event_uuid`, `press_count_since_reload`,
+and `last_press`. Listen for `loxone_air_button_pressed` to trigger
+automations on each detected rising edge.
+
 ## Safety
 
 A direct HA-only heater controller needs a carefully chosen default
