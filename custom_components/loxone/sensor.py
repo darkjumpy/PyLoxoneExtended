@@ -389,7 +389,7 @@ class LoxonePhysicalAirValveSensor(SensorEntity):
         elif terminal.category == "battery":
             self._attr_device_class = SensorDeviceClass.BATTERY
             self._attr_native_unit_of_measurement = PERCENTAGE
-        elif terminal.category == "diagnostic":
+        elif terminal.category in ("diagnostic", "rssi", "link_quality"):
             self._attr_entity_category = EntityCategory.DIAGNOSTIC
         self._attr_extra_state_attributes = {
             "loxone_physical_terminal": terminal.uuid,
