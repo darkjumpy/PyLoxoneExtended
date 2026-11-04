@@ -35,6 +35,14 @@ actuator with a sensor; the room control logic is still in Loxone.
 driving it. The measured physical valve position is also not guaranteed to be
 available; the analog output reports the commanded position.
 
+## Manual position and device restart
+
+An additional experimental implementation for manual 0–100% position control
+and an explicit actuator restart button is described in
+[Valve manual controls](valve-manual-controls.md). It requires two Loxone
+Virtual Inputs and safe AUTO/manual selection logic; a verified dedicated
+calibration API command is not yet available.
+
 ## Automatic discovery
 
 Back up HA and install a test release from the feature branch. Physical Air
