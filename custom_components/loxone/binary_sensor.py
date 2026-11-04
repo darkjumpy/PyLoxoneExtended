@@ -27,6 +27,7 @@ from .helpers import (add_room_and_cat_to_value_values, get_all,
                       get_or_create_device)
 from .miniserver import get_miniserver_from_hass
 from .valve_air import async_get_air_valves, async_read_terminal, linked_terminal_ids
+from .air_command_queue import async_get_air_command_queue
 
 
 _LOGGER = logging.getLogger(__name__)
@@ -71,10 +72,15 @@ async def async_setup_entry(
     air_valves = await async_get_air_valves(hass, miniserver, config_entry)
     air_by_uuid = {terminal.uuid.lower(): terminal for terminal in air_valves}
     visualized = linked_terminal_ids(loxconfig)
+    queue = await async_get_air_command_queue(hass, miniserver, config_entry)
+    seen = set()
     for terminal in air_valves:
         get_or_create_device(
             terminal.device_uuid, terminal.device_name, "Valve Actuator Air", ""
         )
+        if terminal.serial and terminal.device_uuid not in seen:
+            entities.append(LoxoneAirPendingCommandSensor(terminal, queue))
+            seen.add(terminal.device_uuid)
 
     for sensor in get_all(loxconfig, "InfoOnlyDigital"):
         sensor = add_room_and_cat_to_value_values(loxconfig, sensor)
@@ -109,6 +115,55 @@ async def async_setup_entry(
         )
     )
     async_add_entities(entities)
+
+
+class LoxoneAirPendingCommandSensor(BinarySensorEntity):
+    """Show whether this valve has an undelivered setpoint in HA's queue."""
+
+    _attr_has_entity_name = True
+    _attr_name = "Polecenie oczekuje na wysłanie"
+    _attr_should_poll = False
+    _attr_icon = "mdi:tray-arrow-up"
+
+    def __init__(self, terminal, queue):
+        self._serial = terminal.serial
+        self._parameter = "valve_position"
+        self._queue = queue
+        self._attr_unique_id = f"{terminal.device_uuid}_air_pending_valve_position"
+        self._attr_device_info = get_or_create_device(
+            terminal.device_uuid, terminal.device_name, "Valve Actuator Air", ""
+        )
+        self._refresh()
+
+    def _refresh(self):
+        self._attr_is_on = self._queue.get_pending(
+            self._serial, self._parameter
+        ) is not None
+
+    async def async_added_to_hass(self):
+        await super().async_added_to_hass()
+        self.async_on_remove(self._queue.subscribe(
+            self._serial, self._parameter, self._on_queue_changed
+        ))
+
+    def _on_queue_changed(self):
+        self._refresh()
+        self.async_write_ha_state()
+
+    @property
+    def extra_state_attributes(self):
+        item = self._queue.get_pending(self._serial, self._parameter)
+        return {
+            "parameter": self._parameter,
+            "pending_value": item.value if item is not None else None,
+            "queued_at": item.queued_at if item is not None else None,
+            "last_acknowledged_value": self._queue.last_ack(
+                self._serial, self._parameter
+            ),
+            "last_error": self._queue.last_error(
+                self._serial, self._parameter
+            ),
+        }
 
 
 class LoxonePhysicalAirValveBinarySensor(BinarySensorEntity):
