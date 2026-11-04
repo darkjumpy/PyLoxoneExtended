@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import logging
+from datetime import timedelta
 from time import monotonic
 from typing import Literal, final
 
@@ -19,14 +20,16 @@ from homeassistant.core import HomeAssistant, callback
 from homeassistant.helpers.aiohttp_client import async_get_clientsession
 from homeassistant.helpers.dispatcher import async_dispatcher_connect
 from homeassistant.helpers.entity_platform import AddEntitiesCallback
+from homeassistant.helpers.event import async_track_time_interval
 from homeassistant.helpers.typing import ConfigType, DiscoveryInfoType
 
 from . import LoxoneEntity
-from .const import CONF_ACTIONID, DOMAIN, SENDDOMAIN
+from .const import CONF_ACTIONID, DOMAIN, EVENT, SENDDOMAIN
 from .helpers import (add_room_and_cat_to_value_values, get_all,
                       get_or_create_device)
 from .miniserver import get_miniserver_from_hass
-from .valve_air import async_get_air_valves, async_read_terminal, linked_terminal_ids
+from .valve_air import (air_terminal_poll_interval, async_get_air_valves,
+                        async_read_terminal, linked_terminal_ids)
 from .air_command_queue import async_get_air_command_queue
 
 
@@ -167,13 +170,16 @@ class LoxoneAirPendingCommandSensor(BinarySensorEntity):
 
 
 class LoxonePhysicalAirValveBinarySensor(BinarySensorEntity):
-    """Expose a physical Air valve digital terminal as a read-only entity."""
+    """Physical Air digital terminal with event-first updates and HTTP fallback."""
 
-    _attr_should_poll = True
+    # HA's standard poll interval (usually 30s) cannot implement a 5s
+    # configured limit. Schedule our own periodic refresh while loaded.
+    _attr_should_poll = False
 
     def __init__(self, terminal, config_entry):
         self._terminal = terminal
         self._config_entry = config_entry
+        self._poll_interval = air_terminal_poll_interval(config_entry.options)
         self._last_poll = 0.0
         self._attr_unique_id = terminal.uuid
         self._attr_name = terminal.name
@@ -189,13 +195,45 @@ class LoxonePhysicalAirValveBinarySensor(BinarySensorEntity):
         elif any(word in name for word in ("bateria", "battery", "fehler", "error", "stuck", "blokada")):
             self._attr_device_class = BinarySensorDeviceClass.PROBLEM
         self._attr_extra_state_attributes = {
-            "loxone_physical_terminal": terminal.uuid
+            "loxone_physical_terminal": terminal.uuid,
+            "fallback_poll_interval_seconds": self._poll_interval,
+            "updates": "Loxone events when available, HTTP fallback",
         }
 
+    async def async_added_to_hass(self):
+        await super().async_added_to_hass()
+        # Only Loxone state events that contain the *exact terminal UUID*
+        # can update this entity. If the Miniserver does not publish the
+        # physical terminal in its websocket event feed, HTTP is fallback.
+        self.async_on_remove(self.hass.bus.async_listen(EVENT, self._on_event))
+        self.async_on_remove(async_track_time_interval(
+            self.hass, self._on_poll_timer, timedelta(seconds=self._poll_interval)
+        ))
+        self.async_schedule_update_ha_state(force_refresh=True)
+
+    def _on_poll_timer(self, _now):
+        self.async_schedule_update_ha_state(force_refresh=True)
+
+    def _on_event(self, event):
+        raw = event.data.get(self._terminal.uuid)
+        if raw is None:
+            return
+        try:
+            value = float(raw)
+        except (TypeError, ValueError):
+            return
+        if value not in (0.0, 1.0):
+            return
+        self._attr_is_on = value == 1.0
+        self._attr_available = True
+        # Avoid immediately making a redundant HTTP request.
+        self._last_poll = monotonic()
+        self.async_write_ha_state()
+
     async def async_update(self) -> None:
-        """Fetch the current digital value; never write device commands."""
+        """Fetch a fresh terminal state on the configurable fallback timer."""
         now = monotonic()
-        if now - self._last_poll < 120:
+        if now - self._last_poll < max(1, self._poll_interval * 0.8):
             return
         self._last_poll = now
         value = await async_read_terminal(
