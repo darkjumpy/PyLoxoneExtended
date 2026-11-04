@@ -225,10 +225,14 @@ async def async_setup_entry(
     air_by_uuid = {terminal.uuid.lower(): terminal for terminal in air_valves}
     visualized = linked_terminal_ids(loxconfig)
     # Register the physical device before existing visualized sensors.
+    seen_air_devices = set()
     for terminal in air_valves:
         get_or_create_device(
             terminal.device_uuid, terminal.device_name, "Valve Actuator Air", ""
         )
+        if terminal.device_uuid not in seen_air_devices:
+            entities.append(LoxoneAirValvePowerSourceSensor(terminal))
+            seen_air_devices.add(terminal.device_uuid)
 
     if "softwareVersion" in loxconfig:
         entities.append(LoxoneVersionSensor(miniserver.serial, loxconfig["softwareVersion"]))
@@ -324,6 +328,40 @@ async def async_setup_entry(
     )
 
     async_add_entities(entities, update_before_add=True)
+
+
+class LoxoneAirValvePowerSourceSensor(SensorEntity):
+    """Configured power mode of a physical Valve Actuator Air.
+
+    This is the Battery flag saved at pairing, not a live supply voltage.
+    Unknown/unavailable XML attributes must not be treated as external power.
+    """
+
+    _attr_has_entity_name = True
+    _attr_should_poll = False
+    _attr_entity_category = EntityCategory.DIAGNOSTIC
+    _attr_device_class = SensorDeviceClass.ENUM
+    _attr_options = ["Baterie", "Zasilanie zewnętrzne", "Nieznane"]
+
+    def __init__(self, terminal):
+        self._attr_unique_id = f"{terminal.device_uuid}_air_power_source"
+        self._attr_name = "Tryb zasilania"
+        self._attr_device_info = get_or_create_device(
+            terminal.device_uuid, terminal.device_name, "Valve Actuator Air", ""
+        )
+        if terminal.battery_powered is True:
+            self._attr_native_value = "Baterie"
+            self._attr_icon = "mdi:battery"
+        elif terminal.battery_powered is False:
+            self._attr_native_value = "Zasilanie zewnętrzne"
+            self._attr_icon = "mdi:power-plug"
+        else:
+            self._attr_native_value = "Nieznane"
+            self._attr_icon = "mdi:help-circle-outline"
+        self._attr_extra_state_attributes = {
+            "data_source": "loxone_project",
+            "mode_measured_live": False,
+        }
 
 
 class LoxonePhysicalAirValveSensor(SensorEntity):
