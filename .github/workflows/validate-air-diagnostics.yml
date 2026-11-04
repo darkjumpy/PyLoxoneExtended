@@ -32,6 +32,7 @@ jobs:
           source = ast.parse(path.read_text(encoding="utf-8"))
           wanted = {
               "_device_serial",
+              "tech_report_confirms_awake",
               "parse_device_report_response",
               "parse_valve_tech_report",
               "parse_link_quality_report",
@@ -45,7 +46,7 @@ jobs:
                   isinstance(t, ast.Name) and t.id in constants for t in node.targets
               ):
                   nodes.append(node)
-          assert len(nodes) == 6, [getattr(n, "name", "?") for n in nodes]
+          assert len(nodes) == 7, [getattr(n, "name", "?") for n in nodes]
           namespace = {"re": re, "ET": ET}
           exec(compile(ast.Module(body=nodes, type_ignores=[]), str(path), "exec"), namespace)
           payload = (b'<LL Code="200" value="Serial:0123456789ABCDEF;Pos:2364;'
@@ -64,5 +65,9 @@ jobs:
           link = "Target: 01:23:45:67:89:AB:CD:EF;AvgRssiRx: -83;AvgLqiRx %: 97;ErrorRate %: 0;"
           quality = namespace["parse_link_quality_report"](link)
           assert quality == {"rssi_rx": -83.0, "lqi_rx": 97.0, "error_rate": 0.0}, quality
-          print("Air XML report parsing and link quality smoke tests passed.")
+          ready = namespace["tech_report_confirms_awake"]
+          assert ready("Serial:0123456789ABCDEF;BatteryPowered:1;", "0123456789ABCDEF")
+          assert not ready("timeout", "0123456789ABCDEF")
+          assert not ready("Serial:FEDCBA9876543210;", "0123456789ABCDEF")
+          print("Air XML report parsing, awake guard and link quality smoke tests passed.")
           PY
