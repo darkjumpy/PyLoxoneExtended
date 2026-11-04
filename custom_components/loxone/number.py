@@ -53,10 +53,13 @@ async def async_setup_entry(
     for terminal in unique.values():
         serial, battery_powered = terminal.serial, terminal.battery_powered
 
-        async def deliver(value: float, head=serial, battery=battery_powered):
+        async def deliver(value: float, head=serial):
+            # The queue always checks the physical head by TechReport first,
+            # and dynamically reads its actual BatteryPowered mode.
+            # Never trust a stale Loxone project Battery flag for delivery.
             await async_drive_to(
                 async_get_clientsession(hass), config_entry, head,
-                value, battery, already_probed=(battery is not False),
+                value, None, already_probed=True,
             )
 
         queue.register_sender(
