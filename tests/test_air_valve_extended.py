@@ -9,6 +9,7 @@ from custom_components.loxone.valve_air import (
     linked_terminal_ids,
     _direct_target_input,
     _device_serial,
+    parse_link_quality_report,
 )
 
 PROGRAM = b"""<?xml version="1.0"?>
@@ -87,6 +88,7 @@ def test_direct_target_requires_exact_one_analog_virtual_input():
     assert other.manual_value_uuid is None
     assert _direct_target_input(ET.fromstring(PROGRAM), "unknown") is None
     assert _device_serial("50:4F:94:AA:BB:CC") == "504F94AABBCC"
+    assert _device_serial("50:4F:94:FF:FE:D1:7B:CE") == "504F94FFFED17BCE"
     assert _device_serial("../Reboot") is None
     assert _device_serial("oops") is None
 
@@ -101,3 +103,31 @@ def test_rssi_and_link_quality_are_measurements_only_when_present():
     assert lqi.unit == "%"
     other = [t for t in terminals if t.device_uuid == "device-valve-2"]
     assert not any(t.category in ("rssi", "link_quality") for t in other)
+
+
+def test_parses_actual_link_quality_report():
+    report = """Target: 50:4f:94:ff:fe:d1:7b:ce;
+MinRssiRx: -84;
+MaxRssiRx: -82;
+AvgRssiRx: -83;
+MinRssiTx: -83;
+MaxRssiTx: -80;
+AvgRssiTx: -82;
+MinLqiRx %: 84;
+MaxLqiRx %: 100;
+AvgLqiRx %: 97;
+MinLqiTx %: 100;
+MaxLqiTx %: 100;
+AvgLqiTx %: 100;
+Packets: 10;
+ErrorRate %: 0; Errors: 0;
+"""
+    assert parse_link_quality_report(report) == {
+        "rssi_rx": -83.0,
+        "rssi_tx": -82.0,
+        "lqi_rx": 97.0,
+        "lqi_tx": 100.0,
+        "packets": 10.0,
+        "error_rate": 0.0,
+    }
+    assert parse_link_quality_report("LL Code 200 - command accepted") == {}
