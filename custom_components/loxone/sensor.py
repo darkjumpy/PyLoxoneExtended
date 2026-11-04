@@ -38,7 +38,7 @@ from .const import CLIMATE_EVENT, CONF_ACTIONID, DOMAIN, EVENT, SENDDOMAIN, THRO
 from .helpers import (add_room_and_cat_to_value_values, clean_unit, get_all,
                       get_or_create_device)
 from .miniserver import get_miniserver_from_hass
-from .valve_air import async_get_air_valves, async_read_terminal, linked_terminal_ids
+from .valve_air import async_get_air_valves, async_get_valve_diagnostics, async_read_terminal, linked_terminal_ids
 
 
 NEW_SENSOR = "sensors"
@@ -231,7 +231,14 @@ async def async_setup_entry(
             terminal.device_uuid, terminal.device_name, "Valve Actuator Air", ""
         )
         if terminal.device_uuid not in seen_air_devices:
-            entities.append(LoxoneAirValvePowerSourceSensor(terminal))
+            entities.append(LoxoneAirValvePowerSourceSensor(terminal, config_entry, miniserver))
+            if terminal.serial is not None:
+                for field in AIR_VALVE_DIAGNOSTIC_FIELDS:
+                    entities.append(
+                        LoxoneAirValveDiagnosticSensor(
+                            terminal, config_entry, miniserver, field
+                        )
+                    )
             seen_air_devices.add(terminal.device_uuid)
 
     if "softwareVersion" in loxconfig:
@@ -330,38 +337,104 @@ async def async_setup_entry(
     async_add_entities(entities, update_before_add=True)
 
 
-class LoxoneAirValvePowerSourceSensor(SensorEntity):
-    """Configured power mode of a physical Valve Actuator Air.
+AIR_VALVE_DIAGNOSTIC_FIELDS = {
+    "requested_percent": ("Zadane otwarcie", PERCENTAGE),
+    "destination_percent": ("Otwarcie docelowe", PERCENTAGE),
+    "reference_state": ("Stan kalibracji", None),
+    "rssi_rx": ("RSSI odbiór", "dBm"),
+    "rssi_tx": ("RSSI nadawanie", "dBm"),
+    "lqi_rx": ("Link Quality odbiór", PERCENTAGE),
+    "lqi_tx": ("Link Quality nadawanie", PERCENTAGE),
+    "error_rate": ("Błędy transmisji", PERCENTAGE),
+    "error_count": ("Błędy napędu", None),
+}
 
-    This is the Battery flag saved at pairing, not a live supply voltage.
-    Unknown/unavailable XML attributes must not be treated as external power.
-    """
+
+class LoxoneAirValvePowerSourceSensor(SensorEntity):
+    """Configured supply mode, superseded by live TechReport if available."""
 
     _attr_has_entity_name = True
-    _attr_should_poll = False
     _attr_entity_category = EntityCategory.DIAGNOSTIC
     _attr_device_class = SensorDeviceClass.ENUM
     _attr_options = ["Baterie", "Zasilanie zewnętrzne", "Nieznane"]
 
-    def __init__(self, terminal):
+    def __init__(self, terminal, config_entry, miniserver):
         self._attr_unique_id = f"{terminal.device_uuid}_air_power_source"
         self._attr_name = "Tryb zasilania"
         self._attr_device_info = get_or_create_device(
             terminal.device_uuid, terminal.device_name, "Valve Actuator Air", ""
         )
-        if terminal.battery_powered is True:
+        self._serial = terminal.serial
+        self._config_entry = config_entry
+        self._miniserver = miniserver
+        self._battery_powered = terminal.battery_powered
+        self._attr_should_poll = bool(self._serial)
+        self._attr_extra_state_attributes = {
+            "data_source": "loxone_project",
+            "mode_measured_live": False,
+        }
+        self._update_value(self._battery_powered)
+
+    def _update_value(self, battery: bool | None) -> None:
+        if battery is True:
             self._attr_native_value = "Baterie"
             self._attr_icon = "mdi:battery"
-        elif terminal.battery_powered is False:
+        elif battery is False:
             self._attr_native_value = "Zasilanie zewnętrzne"
             self._attr_icon = "mdi:power-plug"
         else:
             self._attr_native_value = "Nieznane"
             self._attr_icon = "mdi:help-circle-outline"
-        self._attr_extra_state_attributes = {
-            "data_source": "loxone_project",
-            "mode_measured_live": False,
-        }
+
+    async def async_update(self) -> None:
+        if not self._serial:
+            return
+        values = await async_get_valve_diagnostics(
+            self.hass, self._miniserver, self._config_entry,
+            self._serial, self._battery_powered,
+        )
+        if "battery_powered" in values:
+            self._update_value(values["battery_powered"])
+            self._attr_extra_state_attributes = {
+                "data_source": "loxone_tech_report",
+                "mode_measured_live": True,
+            }
+
+
+class LoxoneAirValveDiagnosticSensor(SensorEntity):
+    """One of the actual fields returned by the device's TechReport/LQI."""
+
+    _attr_has_entity_name = True
+    _attr_should_poll = True
+    _attr_entity_category = EntityCategory.DIAGNOSTIC
+
+    def __init__(self, terminal, config_entry, miniserver, field: str):
+        name, unit = AIR_VALVE_DIAGNOSTIC_FIELDS[field]
+        self._attr_unique_id = f"{terminal.device_uuid}_diagnostic_{field}"
+        self._attr_name = name
+        self._attr_native_unit_of_measurement = unit
+        self._attr_device_info = get_or_create_device(
+            terminal.device_uuid, terminal.device_name, "Valve Actuator Air", ""
+        )
+        self._config_entry = config_entry
+        self._miniserver = miniserver
+        self._serial = terminal.serial
+        self._battery_powered = terminal.battery_powered
+        self._field = field
+        self._attr_native_value = None
+        self._attr_available = False
+        if field not in ("reference_state",):
+            self._attr_state_class = SensorStateClass.MEASUREMENT
+
+    async def async_update(self) -> None:
+        values = await async_get_valve_diagnostics(
+            self.hass, self._miniserver, self._config_entry,
+            self._serial, self._battery_powered,
+        )
+        value = values.get(self._field)
+        self._attr_available = value is not None
+        if value is not None:
+            self._attr_native_value = value
 
 
 class LoxonePhysicalAirValveSensor(SensorEntity):
