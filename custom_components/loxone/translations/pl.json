@@ -2,7 +2,11 @@
   "options": {
     "step": {
       "init": {
-        "data": {}
+        "data": {
+          "air_terminal_poll_interval": "Interwał odpytywania fizycznych wejść i czujników Air (sekundy)"
+        },
+        "title": "Ustawienia PyLoxone Extended",
+        "description": "Interwał 5–600 sekund steruje zapasowym odpytywaniem fizycznych wejść i czujników Air. Zdarzenia Loxone aktualizują stany natychmiast, jeśli są udostępniane przez Miniserver."
       }
     }
   }
