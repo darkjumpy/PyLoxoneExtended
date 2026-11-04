@@ -330,24 +330,50 @@ def estimated_valve_opening(values: dict) -> int | None:
     return max(0, min(100, int(100 * (limit - position) / limit + 0.5)))
 
 
-def _direct_target_input(root: ET.Element, device_name: str) -> str | None:
-    """Find a dedicated Loxone VirtualIn for the valve setpoint.
+def expected_valve_input_name(serial: str | None, device_name: str) -> str:
+    """Stable operator-facing name for the per-head analog Virtual Input."""
+    normalized = _device_serial(serial)
+    return f"HA Valve | {normalized or device_name} | Value"
 
-    A physical output cannot be written through documented SPS I/O services.
-    The virtual analog input must be connected to the actuator in Loxone
-    Config. A unique exact match is required for safe auto-discovery.
+
+def _direct_target_input(
+    root: ET.Element, device_name: str, serial: str | None = None,
+) -> str | None:
+    """Find an explicitly named analog VirtualIn for one physical Air head.
+
+    Real Loxone program XML often omits the Analog attribute for VirtualIn;
+    absence is not proof of digital. Explicit digital flags ARE rejected.
+    Prefer the stable serial-based title; retain the older name-based title.
+    Reject duplicates and never guess by proximity or a fuzzy name match.
     """
-    expected = f"HA Valve | {device_name} | Value".casefold()
-    matches = []
-    for control in root.iter("C"):
-        if control.get("Type") != "VirtualIn":
-            continue
-        title = (control.get("Title") or "").strip().casefold()
-        uuid = control.get("U")
-        analog = (control.get("Analog") or "false").lower() in ("true", "1")
-        if uuid and title == expected and analog:
+    names = [expected_valve_input_name(serial, device_name).casefold()]
+    old_name = f"HA Valve | {device_name} | Value".casefold()
+    if old_name not in names:
+        names.append(old_name)
+    for name in names:
+        matches = []
+        for control in root.iter("C"):
+            if control.get("Type") != "VirtualIn":
+                continue
+            if (control.get("Title") or "").strip().casefold() != name:
+                continue
+            uuid = control.get("U")
+            if not uuid:
+                continue
+            if (control.get("Analog") or "").strip().lower() in ("false", "0"):
+                continue
+            if any(
+                (control.get(key) or "").strip().lower() in ("true", "1")
+                for key in ("Digital", "UseAsDigital", "IsDigital")
+            ):
+                continue
             matches.append(uuid)
-    return matches[0] if len(matches) == 1 else None
+        if len(matches) > 1:
+            _LOGGER.warning("Multiple HA Valve virtual inputs with the same name; skipping")
+            return None
+        if matches:
+            return matches[0]
+    return None
 
 
 def _name_contains(name: str, words: tuple[str, ...]) -> bool:
@@ -391,7 +417,7 @@ def extract_air_valves(xml: bytes) -> list[AirValveTerminal]:
             continue
         battery_powered = battery_supply_from_attribute(device.get("Battery"))
         serial = _air_device_serial(device)
-        manual_value_uuid = _direct_target_input(root, title)
+        manual_value_uuid = _direct_target_input(root, title, serial)
         children = list(device.iter("C"))[1:]
         analog_outputs = [el for el in children if el.get("Type") == "LoxAIRAactor"]
         is_valve = _name_contains(title, _VALVE_NAMES) or any(
@@ -829,6 +855,51 @@ def linked_terminal_ids(config: dict) -> set[str]:
 
     walk(config.get("controls") or {})
     return known
+
+
+async def async_set_valve_virtual_input(
+    session: ClientSession, config_entry, uuid: str, raw_value: float,
+) -> float:
+    """Set an existing, explicitly configured analog Virtual Input (0..10).
+
+    Never send a command to the hardware Air device. Only the specified
+    VirtualIn UUID in the installed Loxone program is written.
+    """
+    from homeassistant.exceptions import HomeAssistantError
+    from urllib.parse import quote
+
+    if (
+        not uuid or isinstance(raw_value, bool)
+        or not isinstance(raw_value, (float, int))
+        or not math.isfinite(raw_value)
+        or raw_value < 0 or raw_value > 10
+    ):
+        raise HomeAssistantError("Nieprawidłowa wartość wejścia wirtualnego 0–10")
+    endpoint = _endpoint(config_entry)
+    if endpoint is None:
+        raise HomeAssistantError("Brak poprawnych danych połączenia do Miniservera")
+    base, auth = endpoint
+    # One decimal place, so 65% -> 6.5 and the exact output is predictable.
+    command = f"{float(raw_value):.1f}"
+    try:
+        async with session.get(
+            f"{base}/jdev/sps/io/{quote(uuid, safe='-')}/{command}",
+            auth=auth, timeout=ClientTimeout(total=9),
+            allow_redirects=False,
+        ) as response:
+            if response.status != 200:
+                raise HomeAssistantError(f"Miniserver zwrócił HTTP {response.status}")
+            reply = await response.json(content_type=None)
+        ll = reply.get("LL") if isinstance(reply, dict) else None
+        if not isinstance(ll, dict) or str(ll.get("Code")) != "200":
+            raise HomeAssistantError("Miniserver nie potwierdził wartości wejścia wirtualnego")
+        return float(raw_value)
+    except HomeAssistantError:
+        raise
+    except Exception as exc:
+        raise HomeAssistantError(
+            "Nie udało się potwierdzić ustawienia wirtualnego wejścia Loxone"
+        ) from exc
 
 
 async def async_read_terminal(session: ClientSession, config_entry, uuid: str) -> float | None:
