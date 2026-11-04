@@ -1,0 +1,11 @@
+{
+  "options": {
+    "step": {
+      "init": {
+        "data": {
+          "enable_air_valve_discovery": "Wykrywaj fizyczne siłowniki Air (wymaga dostępu do programu Miniservera)"
+        }
+      }
+    }
+  }
+}
