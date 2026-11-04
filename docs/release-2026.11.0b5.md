@@ -31,7 +31,7 @@
 - Pending setpoints survive Home Assistant reload/restart in local storage.
   Safety expiry: 60 minutes, to prevent very stale heating requests.
 - For battery-operated (or unknown-supply) heads, read
-  `TechReport` approximately every 10 seconds while pending, verify
+  `TechReport` approximately every 5 seconds (5-second HTTP timeout) while pending, verify
   the Air serial, detect candidate new wakes via `WkupCnt[]`, and send
   once during that candidate wake. On unconfirmed `timeout`, leave
   the setpoint pending and await the next distinct wake count.
@@ -44,7 +44,7 @@
   real battery Air head returns `WkupCnt[]`, and the device-shell
   `DriveTo/0`, `/1` and `/100` produced motion in manual tests.
   We do **not** yet know if every natural 5-minute polling cycle causes
-  `WkupCnt[]` to change or whether a 10-second HTTP probe catches it.
+  `WkupCnt[]` to change or whether a 5-second HTTP probe catches it.
 - A matching `TechReport` and changed wake count are *candidate* wake
   evidence, not an absolute guarantee that `DriveTo` will respond before
   the head goes back to sleep.
