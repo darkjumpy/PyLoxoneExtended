@@ -3,6 +3,7 @@
 Generic queue keys are (Air serial, entity/parameter key), not just device:
 a future light can independently queue brightness and colour temperature.
 Only Valve Actuator Air / DriveTo is registered as a sender in b5.
+The first successful matching TechReport is a candidate current wake;
 
 The wake detector uses a change in WkupCnt[] observed through TechReport.
 Whether this faithfully tracks *natural* wake-ups on every firmware is not
@@ -227,7 +228,13 @@ class AirCommandQueue:
                     if wake is not None:
                         prev = self._wake_seen.get(serial)
                         self._wake_seen[serial] = wake
-                        if prev is not None and wake != prev:
+                        # Device status docs say TechReport is available
+                        # only while the Air head is awake. The first successful
+                        # report is therefore treated as a candidate wake.
+                        # If the Miniserver served stale data, DriveTo may
+                        # return timeout and will wait for the NEXT counter
+                        # transition; it is never blindly retried.
+                        if prev is None or wake != prev:
                             for item in available:
                                 # Snapshot may have been replaced mid-probe.
                                 fresh = self.pending.get(serial, item.parameter)
