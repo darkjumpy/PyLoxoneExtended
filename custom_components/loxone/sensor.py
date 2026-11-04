@@ -454,7 +454,10 @@ class LoxoneAirValveDiagnosticSensor(SensorEntity):
         value = values.get(self._field)
         self._attr_available = value is not None
         if value is not None:
-            self._attr_native_valuclass LoxonePhysicalAirValveSensor(SensorEntity):
+            self._attr_native_value = value
+
+
+class LoxonePhysicalAirValveSensor(SensorEntity):
     """Physical Air terminal with event-driven updates and HTTP fallback.
 
     The 'Wysterowanie zaworu' actuator terminal represents normal Loxone
