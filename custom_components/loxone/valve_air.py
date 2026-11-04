@@ -265,7 +265,9 @@ async def _fetch_project(session: ClientSession, config_entry) -> bytes | None:
 
 
 async def async_get_air_valves(hass, miniserver, config_entry) -> list[AirValveTerminal]:
-    """Perform discovery once per loaded Miniserver, shared by HA platforms."""
+    """Perform opt-in discovery once per Miniserver, shared by HA platforms."""
+    if not config_entry.options.get("enable_air_valve_discovery", False):
+        return []
     task = getattr(miniserver, "_air_valve_task", None)
     if task is None:
         async def load() -> list[AirValveTerminal]:
