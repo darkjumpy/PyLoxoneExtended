@@ -7,6 +7,8 @@ on:
       - .github/workflows/validate-air-diagnostics.yml
       - custom_components/loxone/valve_air.py
       - custom_components/loxone/sensor.py
+      - custom_components/loxone/number.py
+      - custom_components/loxone/manifest.json
       - tests/test_air_valve_extended.py
   workflow_dispatch:
 
@@ -34,6 +36,7 @@ jobs:
               "_device_serial",
               "tech_report_confirms_awake",
               "parse_device_report_response",
+              "parse_drive_to_response",
               "parse_valve_tech_report",
               "parse_link_quality_report",
           }
@@ -46,7 +49,7 @@ jobs:
                   isinstance(t, ast.Name) and t.id in constants for t in node.targets
               ):
                   nodes.append(node)
-          assert len(nodes) == 7, [getattr(n, "name", "?") for n in nodes]
+          assert len(nodes) == 8, [getattr(n, "name", "?") for n in nodes]
           namespace = {"re": re, "ET": ET}
           exec(compile(ast.Module(body=nodes, type_ignores=[]), str(path), "exec"), namespace)
           payload = (b'<LL Code="200" value="Serial:0123456789ABCDEF;Pos:2364;'
@@ -69,5 +72,31 @@ jobs:
           assert ready("Serial:0123456789ABCDEF;BatteryPowered:1;", "0123456789ABCDEF")
           assert not ready("timeout", "0123456789ABCDEF")
           assert not ready("Serial:FEDCBA9876543210;", "0123456789ABCDEF")
-          print("Air XML report parsing, awake guard and link quality smoke tests passed.")
+          # The DriveTo helper imports HA's exception type inside the function,
+          # so simulate that dependency in the isolated AST smoke test.
+          import sys
+          import types
+          homeassistant = types.ModuleType("homeassistant")
+          exceptions = types.ModuleType("homeassistant.exceptions")
+          exceptions.HomeAssistantError = RuntimeError
+          sys.modules["homeassistant"] = homeassistant
+          sys.modules["homeassistant.exceptions"] = exceptions
+          reply = namespace["parse_drive_to_response"]
+          serial = "0123456789ABCDEF"
+          control = "dev/sys/wsdevice/0123456789ABCDEF/DriveTo/50"
+          assert reply(f'<LL control="{control}" Code="200" value="ok"/>'.encode(), serial, 50) == "ok"
+          for value, code in [("timeout", "200"), ("Unknown Func", "200"), ("ok", "401")]:
+              try:
+                  reply(f'<LL control="{control}" Code="{code}" value="{value}"/>'.encode(), serial, 50)
+              except RuntimeError:
+                  pass
+              else:
+                  raise AssertionError("DriveTo accepted a non-acknowledged command")
+          try:
+              reply(b'<LL control="dev/sys/wsdevice/FEDCBA9876543210/DriveTo/50" value="ok" Code="200"/>', serial, 50)
+          except RuntimeError:
+              pass
+          else:
+              raise AssertionError("DriveTo accepted an incorrect device")
+          print("Air XML reports, readiness guard and DriveTo acknowledgement tests passed.")
           PY
