@@ -1,9 +1,9 @@
 # PyLoxone
 
-> **PyLoxone Extended fork — experimental 2026.11.0b5**
+> **PyLoxone Extended fork — experimental 2026.11.0b6**
 >
 > This repository (`darkjumpy/PyLoxoneExtended`) is a fork of JoDehli/PyLoxone.
-> The experimental b5 pre-release adds direct manual Valve Actuator Air
+> The experimental b6 pre-release fixes Air head serial discovery and adds direct
 > `DriveTo` control, a per-entity **latest-value-wins pending queue**,
 > a binary **Polecenie oczekuje na wysłanie** indicator, and diagnostics.
 > For battery Air heads it attempts delivery on the next observed natural
@@ -14,9 +14,9 @@
 >
 > To install this fork's beta from HACS, add
 > `https://github.com/darkjumpy/PyLoxoneExtended` as a custom **Integration**
-> repository, select release `2026.11.0b5` once published, and restart
+> repository, select release `2026.11.0b6` once published, and restart
 > Home Assistant. Back up before switching from upstream PyLoxone.
-> See [b5 release notes](docs/release-2026.11.0b5.md) and
+> See [b6 release notes](docs/release-2026.11.0b6.md) and
 > [manual controls](docs/valve-manual-controls.md).
 >
 > The badges and upstream installation instructions below refer to the original
