@@ -13,6 +13,7 @@ from custom_components.loxone.valve_air import (
     parse_valve_tech_report,
     tech_report_confirms_awake,
     parse_device_report_response,
+    parse_drive_to_response,
 )
 
 PROGRAM = b"""<?xml version="1.0"?>
@@ -203,3 +204,27 @@ def test_drive_to_awake_guard_matches_only_this_physical_head():
         "Serial:FEDCBA9876543210;UpTime:9s;", head
     )
     assert not tech_report_confirms_awake("UpTime:9s;", head)
+
+
+def test_drive_to_requires_explicit_ok_and_exact_response_target():
+    from homeassistant.exceptions import HomeAssistantError
+
+    serial = "0123456789ABCDEF"
+    expected = "dev/sys/wsdevice/0123456789ABCDEF/DriveTo/50"
+    successful = f'<LL control="{expected}" value="ok" Code="200"/>'.encode()
+    assert parse_drive_to_response(successful, serial, 50) == "ok"
+
+    for payload in [
+        f'<LL control="{expected}" value="timeout" Code="200"/>'.encode(),
+        f'<LL control="{expected}" value="Unknown Func" Code="200"/>'.encode(),
+        f'<LL control="{expected}" value="ok" Code="401"/>'.encode(),
+        b'<LL control="dev/sys/wsdevice/FEDCBA9876543210/DriveTo/50" value="ok" Code="200"/>',
+        b'<LL control="dev/sys/wsdevice/0123456789ABCDEF/DriveTo/0" value="ok" Code="200"/>',
+        b'<broken>',
+    ]:
+        try:
+            parse_drive_to_response(payload, serial, 50)
+        except HomeAssistantError:
+            pass
+        else:
+            raise AssertionError(f"Incorrectly accepted a DriveTo response: {payload!r}")
