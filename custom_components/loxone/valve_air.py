@@ -340,9 +340,9 @@ def _serial_from_visualization_title(name: str | None, ending: str) -> str | Non
     """
     if not isinstance(name, str):
         return None
-    if not re.match(r"^\\s*HA\\s+Valve\\b", name, re.IGNORECASE):
+    if not re.match(r"^\s*HA\s+Valve\b", name, re.IGNORECASE):
         return None
-    if not re.search(rf"\\b{re.escape(ending)}\\s*$", name, re.IGNORECASE):
+    if not re.search(rf"\b{re.escape(ending)}\s*$", name, re.IGNORECASE):
         return None
     matches = re.findall(
         r"(?<![0-9A-F])(?:[0-9A-F]{16}|[0-9A-F]{12}|(?:[0-9A-F]{2}:){7}[0-9A-F]{2})(?![0-9A-F])",
