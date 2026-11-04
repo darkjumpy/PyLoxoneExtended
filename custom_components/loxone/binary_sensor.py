@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import logging
-from datetime import timedelta
+from time import monotonic
 from typing import Literal, final
 
 import homeassistant.helpers.config_validation as cv
@@ -28,7 +28,6 @@ from .helpers import (add_room_and_cat_to_value_values, get_all,
 from .miniserver import get_miniserver_from_hass
 from .valve_air import async_get_air_valves, async_read_terminal, linked_terminal_ids
 
-SCAN_INTERVAL = timedelta(seconds=120)
 
 _LOGGER = logging.getLogger(__name__)
 NEW_SENSOR = "binairy_sensors"
@@ -120,6 +119,7 @@ class LoxonePhysicalAirValveBinarySensor(BinarySensorEntity):
     def __init__(self, terminal, config_entry):
         self._terminal = terminal
         self._config_entry = config_entry
+        self._last_poll = 0.0
         self._attr_unique_id = terminal.uuid
         self._attr_name = terminal.name
         self._attr_has_entity_name = True
@@ -139,6 +139,10 @@ class LoxonePhysicalAirValveBinarySensor(BinarySensorEntity):
 
     async def async_update(self) -> None:
         """Fetch the current digital value; never write device commands."""
+        now = monotonic()
+        if now - self._last_poll < 120:
+            return
+        self._last_poll = now
         value = await async_read_terminal(
             async_get_clientsession(self.hass),
             self._config_entry,
