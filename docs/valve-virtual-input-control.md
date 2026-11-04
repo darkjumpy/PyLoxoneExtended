@@ -78,6 +78,51 @@ Loxone is responsible for subsequent physical Air delivery. An old
 orphaned HA entity-registry entry may need removing manually.
 Old experimental queue files are not loaded as active device senders.
 
+## Button presses on the physical head
+
+The Valve Actuator Air's **Input 1** is its pairing/push button.
+The Miniserver can show button changes live in Loxone Config even if no
+matching UUID is distributed to Home Assistant's WebSocket event stream.
+Polling a momentary input every 5, 30 or 120 seconds is **not reliable**.
+
+To make HA receive presses promptly, in **Loxone Config**:
+
+1. Select the physical **Wejście 1 / Input 1** on the desired Air head.
+2. Enable **Zastosuj w wizualizacji** if available, give it a room/category,
+   and save the program to Miniserver.
+3. If the physical terminal cannot be published on its own, connect Input 1
+   to a digital visualization-capable info/status object, expose that
+   object in the visualization, and name its displayed control exactly:
+
+   ```
+   HA Valve | 504F94FFFEC51C12 | Button
+   ```
+
+   Replace the serial per head. The physical Input 1 may retain its
+   original name; the `Button` name is the **published info/status
+   object's visualization title**.
+4. Reload PyLoxone Extended, then briefly press the button. If the
+   published state's UUID is present in LoxAPP3 / websocket updates,
+   the existing **Wejście 1** entity on that valve will update
+   immediately, with attributes `last_press`,
+   `press_count_since_reload` and `event_uuids`. HA also emits
+   event type `loxone_air_button_pressed` with the specific Air serial.
+
+A published Loxone InfoOnlyDigital control titled
+`HA Valve | <SERIAL> | Button` is matched to the physical head.
+The integration does not create a second device for that mirror.
+Loxone may escape/replace special separators (like `|`) in the
+visualization: matching is based on the exact serial plus
+`HA Valve` / `Button` words, not the punctuation.
+
+**Verification:** In Home Assistant go to Developer Tools → Events,
+listen for `loxone_air_button_pressed` and press the head's button.
+If no event arrives, inspect `event_uuids` and confirm the physical
+button's event UUID is published in LoxAPP3. When the Miniserver does
+not expose an event, no HA-side polling setting can guarantee catching
+the short electrical pulse. Do not use a polling-only binary entity as
+a safety-critical press trigger.
+
 ## Safety
 
 A direct HA-only heater controller needs a carefully chosen default
