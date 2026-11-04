@@ -154,6 +154,35 @@ def _device_serial(value: str | None) -> str | None:
     return serial if re.fullmatch(r"(?:[0-9A-F]{12}|[0-9A-F]{16})", serial) else None
 
 
+# Diagnostics reported by ShellSysFuncs/GetLinkQuality (if accessible through API).
+_LINK_FIELDS = {
+    "AvgRssiRx": "rssi_rx",
+    "AvgRssiTx": "rssi_tx",
+    "AvgLqiRx": "lqi_rx",
+    "AvgLqiTx": "lqi_tx",
+    "ErrorRate": "error_rate",
+    "Packets": "packets",
+}
+
+
+def parse_link_quality_report(report: str) -> dict[str, float]:
+    """Parse actual GetLinkQuality monitor output without inventing metrics.
+
+    The command is confirmed in Loxone Config, but no official HTTP/WS
+    endpoint for its structured return value is verified yet.
+    """
+    found: dict[str, float] = {}
+    for match in re.finditer(
+        r"(?:^|[;\\r\\n])\\s*(AvgRssiRx|AvgRssiTx|AvgLqiRx|AvgLqiTx|ErrorRate|Packets)\\s*%?\\s*:\\s*(-?\\d+(?:[.,]\\d+)?)",
+        report,
+        re.IGNORECASE,
+    ):
+        key = next((dest for src, dest in _LINK_FIELDS.items() if src.casefold() == match.group(1).casefold()), None)
+        if key is not None:
+            found[key] = float(match.group(2).replace(",", "."))
+    return found
+
+
 def _direct_target_input(root: ET.Element, device_name: str) -> str | None:
     """Find a dedicated Loxone VirtualIn for the valve setpoint.
 
