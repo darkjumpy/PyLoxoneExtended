@@ -86,6 +86,7 @@ class LoxoneAirValveDirectPositionNumber(NumberEntity):
             terminal.device_uuid, terminal.device_name, "Valve Actuator Air", ""
         )
         self._serial = terminal.serial
+        self._battery_powered = terminal.battery_powered
         self._config_entry = config_entry
         self._attr_native_value = None
         self._attr_available = True
@@ -109,7 +110,7 @@ class LoxoneAirValveDirectPositionNumber(NumberEntity):
             self._last_attempt = now
             await async_drive_to(
                 async_get_clientsession(self.hass), self._config_entry,
-                self._serial, value,
+                self._serial, value, self._battery_powered,
             )
             # Successful LL 'ok' confirms command reception only.
             self._attr_native_value = float(value)
