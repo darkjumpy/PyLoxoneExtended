@@ -61,6 +61,7 @@ CONF_SCENE_GEN = "generate_scenes"
 CONF_SCENE_GEN_DELAY = "generate_scenes_delay"
 CONF_LIGHTCONTROLLER_SUBCONTROLS_GEN = "generate_lightcontroller_subcontrols"
 CONF_AIR_TERMINAL_POLL_INTERVAL = "air_terminal_poll_interval"
+CONF_AIR_BUTTON_EVENT_MAP = "air_button_event_map"
 DEFAULT_AIR_TERMINAL_POLL_INTERVAL = 120
 MIN_AIR_TERMINAL_POLL_INTERVAL = 5
 MAX_AIR_TERMINAL_POLL_INTERVAL = 600
