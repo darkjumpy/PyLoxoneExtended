@@ -49,6 +49,9 @@ class AirValveTerminal:
     category: str | None = None
     room_uuid: str | None = None
     battery_powered: bool | None = None
+    serial: str | None = None
+    manual_value_uuid: str | None = None
+    manual_enable_uuid: str | None = None
 
 
 def _decode_loxcc(data: bytes) -> bytes | None:
@@ -141,6 +144,41 @@ def battery_supply_from_attribute(value: str | None) -> bool | None:
     return None
 
 
+def _device_serial(value: str | None) -> str | None:
+    """Normalise only a verified 12-digit hexadecimal device serial."""
+    if not value:
+        return None
+    serial = value.replace(":", "").replace("-", "").upper()
+    return serial if re.fullmatch(r"[0-9A-F]{12}", serial) else None
+
+
+def _manual_inputs(root: ET.Element, device_name: str) -> tuple[str | None, str | None]:
+    """Find two purpose-made Loxone Virtual Inputs for this named actuator.
+
+    A pair is required: manual enabled and target. Other inputs, including
+    the room controller output or physical actor terminal, are NEVER a
+    writable target. This avoids fights between HA and Loxone's IRC block.
+    """
+    target_names = {
+        "value": f"HA Valve | {device_name} | Value".casefold(),
+        "manual": f"HA Valve | {device_name} | Manual".casefold(),
+    }
+    matches: dict[str, list[str]] = {"value": [], "manual": []}
+    for control in root.iter("C"):
+        if control.get("Type") != "VirtualIn":
+            continue
+        title = (control.get("Title") or "").strip().casefold()
+        uuid = control.get("U")
+        analog = (control.get("Analog") or "false").lower() in ("true", "1")
+        if uuid and title == target_names["value"] and analog:
+            matches["value"].append(uuid)
+        if uuid and title == target_names["manual"] and not analog:
+            matches["manual"].append(uuid)
+    if len(matches["value"]) == 1 and len(matches["manual"]) == 1:
+        return matches["value"][0], matches["manual"][0]
+    return None, None
+
+
 def _name_contains(name: str, words: tuple[str, ...]) -> bool:
     low = name.casefold()
     return any(word in low for word in words)
@@ -181,6 +219,8 @@ def extract_air_valves(xml: bytes) -> list[AirValveTerminal]:
         if not uuid:
             continue
         battery_powered = battery_supply_from_attribute(device.get("Battery"))
+        serial = _device_serial(device.get("Serial"))
+        manual_value_uuid, manual_enable_uuid = _manual_inputs(root, title)
         children = list(device.iter("C"))[1:]
         analog_outputs = [el for el in children if el.get("Type") == "LoxAIRAactor"]
         is_valve = _name_contains(title, _VALVE_NAMES) or any(
@@ -227,6 +267,9 @@ def extract_air_valves(xml: bytes) -> list[AirValveTerminal]:
                     name=name, kind="analog" if kind in _ANALOG_TYPES else "digital",
                     unit=unit, category=category, room_uuid=room,
                     battery_powered=battery_powered,
+                    serial=serial,
+                    manual_value_uuid=manual_value_uuid,
+                    manual_enable_uuid=manual_enable_uuid,
                 )
             )
             seen.add(term_uuid.lower())
