@@ -303,6 +303,23 @@ async def async_unload_entry(hass, config_entry):
                 )
         coordinator._listening_task = None
 
+        # Cancel background Air delivery workers on integration reload/unload.
+        # Pending setpoints are preserved by the queue in HA storage.
+        queue_task = getattr(
+            getattr(coordinator, "miniserver", None),
+            "_air_command_queue_task", None,
+        )
+        if queue_task is not None:
+            try:
+                queue = await queue_task
+                await queue.async_stop()
+            except asyncio.CancelledError:
+                pass
+            except Exception as err:  # noqa: BLE001
+                _LOGGER.warning(
+                    "Failed to stop Loxone Air delivery queue: %s", err
+                )
+
         try:
             await coordinator.async_cleanup()
         except Exception as err:  # noqa: BLE001
