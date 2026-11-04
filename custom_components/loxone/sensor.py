@@ -544,9 +544,6 @@ class LoxonePhysicalAirValveSensor(SensorEntity):
             self._attr_native_value = value
 
 
-e = value
-
-
 class LoxoneCustomSensor(LoxoneEntity, SensorEntity):
     def __init__(self, **kwargs):
         self._attr_name = kwargs.pop("name", None)
