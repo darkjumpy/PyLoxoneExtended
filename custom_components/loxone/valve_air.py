@@ -12,6 +12,7 @@ This implementation is intentionally limited to Loxone Valve Actuator Air.
 
 from __future__ import annotations
 
+import asyncio
 import io
 import json
 import logging
@@ -21,6 +22,7 @@ import xml.etree.ElementTree as ET
 import zipfile
 from dataclasses import dataclass
 from urllib.parse import urlsplit
+from time import monotonic
 
 from aiohttp import BasicAuth, ClientSession, ClientTimeout
 from homeassistant.const import CONF_HOST, CONF_PASSWORD, CONF_PORT, CONF_USERNAME
@@ -448,6 +450,93 @@ async def async_restart_valve(session: ClientSession, config_entry, serial: str)
         raise
     except Exception as err:
         raise HomeAssistantError("Cannot send restart command to Loxone Air") from err
+
+
+async def _read_device_shell_report(
+    session: ClientSession, config_entry, serial: str, command: str,
+) -> str | None:
+    """Read a validated diagnostic shell command from the Miniserver.
+
+    The user confirmed this path and an XML LL response for TechReport.
+    GetLinkQuality is a best-effort read-only probe: availability depends
+    on firmware and Miniserver permissions.
+    """
+    if command not in ("TechReport", "GetLinkQuality"):
+        return None
+    serial = _device_serial(serial)
+    endpoint = _endpoint(config_entry)
+    if serial is None or endpoint is None:
+        return None
+    base, auth = endpoint
+    try:
+        async with session.get(
+            f"{base}/dev/sys/wsdevice/{serial}/{command}",
+            auth=auth,
+            timeout=ClientTimeout(total=12),
+            allow_redirects=False,
+        ) as response:
+            if response.status != 200:
+                _LOGGER.debug("Valve %s HTTP %s", command, response.status)
+                return None
+            # Never store or emit full device logs or private serial numbers.
+            payload = await response.content.read(65537)
+            if len(payload) > 65536:
+                return None
+        xml = ET.fromstring(payload)
+        ll = xml if xml.tag == "LL" else xml.find(".//LL")
+        if ll is None or str(ll.get("Code")) != "200":
+            return None
+        return ll.get("value")
+    except (OSError, ValueError, ET.ParseError) as err:
+        _LOGGER.debug("Valve diagnostic %s unavailable: %s", command, type(err).__name__)
+        return None
+    except Exception as err:  # noqa: BLE001 - optional diagnostics
+        _LOGGER.debug("Valve diagnostic %s unavailable: %s", command, type(err).__name__)
+        return None
+
+
+async def async_get_valve_diagnostics(
+    hass, miniserver, config_entry, serial: str | None, battery_powered: bool | None,
+) -> dict[str, int | float | bool | str]:
+    """Share one poll among all sensors on one physical Air valve.
+
+    The Miniserver, not the Air head, is polled. Battery-operated devices
+    are polled less often to avoid unnecessary traffic and wake-ups.
+    """
+    normalized = _device_serial(serial)
+    if normalized is None:
+        return {}
+    cache = getattr(miniserver, "_air_valve_diagnostic_cache", None)
+    if cache is None:
+        cache = {}
+        miniserver._air_valve_diagnostic_cache = cache
+    now = monotonic()
+    interval = 900 if battery_powered is True else 180
+    cached = cache.get(normalized)
+    if cached is not None and now - cached[0] < interval:
+        return await cached[1]
+
+    async def load() -> dict[str, int | float | bool | str]:
+        session = async_get_clientsession(hass)
+        tech, link = await asyncio.gather(
+            _read_device_shell_report(session, config_entry, normalized, "TechReport"),
+            _read_device_shell_report(session, config_entry, normalized, "GetLinkQuality"),
+        )
+        values: dict[str, int | float | bool | str] = (
+            parse_valve_tech_report(tech) if tech else {}
+        )
+        if link:
+            # Avoid attributing Air Base RSSI/LQI to a specific head.
+            match = re.search(r"(?:^|[;\r\n])\s*Target\s*:\s*([0-9a-fA-F:-]+)", link)
+            if match is None or _device_serial(match.group(1)) == normalized:
+                values.update(parse_link_quality_report(link))
+            else:
+                _LOGGER.debug("Valve link report target differs from device; skipping")
+        return values
+
+    task = hass.async_create_task(load(), name="loxone air valve diagnostics")
+    cache[normalized] = (now, task)
+    return await task
 
 
 async def async_get_air_valves(hass, miniserver, config_entry) -> list[AirValveTerminal]:
