@@ -53,12 +53,15 @@ async def async_setup_entry(
         if terminal.manual_value_uuid and terminal.manual_enable_uuid
     }
     visualized = linked_terminal_ids(loxconfig)
+    manual_by_uuid = {t.manual_enable_uuid.lower(): t for t in manual_devices.values()}
     for terminal in manual_devices.values():
         if terminal.manual_enable_uuid.lower() not in visualized:
             entities.append(LoxoneAirValveManualModeSwitch(terminal, config_entry))
 
     for switch_entity in get_all(loxconfig, ["Switch", "TimedSwitch", "Intercom", "IRoomControllerV2", "LightControllerV2"]):
         switch_entity = add_room_and_cat_to_value_values(loxconfig, switch_entity)
+        if match := manual_by_uuid.get(switch_entity["uuidAction"].lower()):
+            switch_entity["parent_id"] = match.device_uuid
 
         if switch_entity["type"] in ["Switch"]:
             new_switch = LoxoneSwitch(**switch_entity)
@@ -267,7 +270,7 @@ class LoxoneSwitch(LoxoneEntity, SwitchEntity):
 
         self.type = "Switch"
         self._attr_device_info = get_or_create_device(
-            self.unique_id, self.name, self.type, self.room
+            kwargs.get("parent_id") or self.unique_id, self.name, self.type, self.room
         )
 
     @property
