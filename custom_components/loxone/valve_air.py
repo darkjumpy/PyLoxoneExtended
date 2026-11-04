@@ -13,6 +13,7 @@ This implementation is intentionally limited to Loxone Valve Actuator Air.
 from __future__ import annotations
 
 import io
+import json
 import logging
 import re
 import struct
@@ -347,11 +348,20 @@ async def async_restart_valve(session: ClientSession, config_entry, serial: str)
         ) as response:
             if response.status != 200:
                 raise HomeAssistantError(f"Loxone device restart HTTP {response.status}")
-            payload = await response.json(content_type=None)
-            ll = payload.get("LL", {})
-            if str(ll.get("Code", "200")) != "200":
+            content = (await response.text()).strip()
+            if content.startswith("{"):
+                payload = json.loads(content)
+                ll = payload.get("LL", {})
+                code = ll.get("Code")
+            elif content.startswith("<"):
+                root = ET.fromstring(content)
+                result = root if root.tag == "LL" else root.find(".//LL")
+                code = result.get("Code") if result is not None else None
+            else:
+                raise HomeAssistantError("Unrecognized Loxone device restart response")
+            if str(code) != "200":
                 raise HomeAssistantError(
-                    f"Loxone device restart code {ll.get('Code')}"
+                    f"Loxone device restart response code {code}"
                 )
     except HomeAssistantError:
         raise
