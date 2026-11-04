@@ -452,6 +452,20 @@ async def async_restart_valve(session: ClientSession, config_entry, serial: str)
         raise HomeAssistantError("Cannot send restart command to Loxone Air") from err
 
 
+def parse_device_report_response(payload: bytes) -> str | None:
+    """Return the content of a successful Loxone LL XML diagnostic response."""
+    if len(payload) > 65536:
+        return None
+    try:
+        root = ET.fromstring(payload)
+    except ET.ParseError:
+        return None
+    ll = root if root.tag == "LL" else root.find(".//LL")
+    if ll is None or str(ll.get("Code")) != "200":
+        return None
+    return ll.get("value")
+
+
 async def _read_device_shell_report(
     session: ClientSession, config_entry, serial: str, command: str,
 ) -> str | None:
@@ -482,11 +496,7 @@ async def _read_device_shell_report(
             payload = await response.content.read(65537)
             if len(payload) > 65536:
                 return None
-        xml = ET.fromstring(payload)
-        ll = xml if xml.tag == "LL" else xml.find(".//LL")
-        if ll is None or str(ll.get("Code")) != "200":
-            return None
-        return ll.get("value")
+        return parse_device_report_response(payload)
     except (OSError, ValueError, ET.ParseError) as err:
         _LOGGER.debug("Valve diagnostic %s unavailable: %s", command, type(err).__name__)
         return None
@@ -522,6 +532,11 @@ async def async_get_valve_diagnostics(
             _read_device_shell_report(session, config_entry, normalized, "TechReport"),
             _read_device_shell_report(session, config_entry, normalized, "GetLinkQuality"),
         )
+        if tech:
+            reported = re.search(r"(?:^|[;\r\n])\s*Serial:\s*([0-9a-fA-F:-]+)", tech)
+            if reported and _device_serial(reported.group(1)) != normalized:
+                _LOGGER.debug("Valve TechReport serial differs from device; skipping")
+                tech = None
         values: dict[str, int | float | bool | str] = (
             parse_valve_tech_report(tech) if tech else {}
         )
