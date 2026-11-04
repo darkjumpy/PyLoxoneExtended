@@ -11,6 +11,8 @@ from typing import final
 
 from homeassistant.components.button import ButtonEntity
 from homeassistant.config_entries import ConfigEntry
+from homeassistant.const import EntityCategory
+from homeassistant.helpers.aiohttp_client import async_get_clientsession
 from homeassistant.core import HomeAssistant
 from homeassistant.helpers.entity import DeviceInfo
 from homeassistant.helpers.entity_platform import AddEntitiesCallback
@@ -19,8 +21,9 @@ from homeassistant.util import dt as dt_util
 
 from . import LoxoneEntity
 from .const import DOMAIN, SENDDOMAIN
-from .helpers import add_room_and_cat_to_value_values, get_all
+from .helpers import add_room_and_cat_to_value_values, get_all, get_or_create_device
 from .miniserver import get_miniserver_from_hass
+from .valve_air import async_get_air_valves, async_restart_valve
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -49,7 +52,33 @@ async def async_setup_entry(
         button_entity = add_room_and_cat_to_value_values(loxconfig, button_entity)
         entities.append(LoxoneButton(**button_entity))
 
+    valves = await async_get_air_valves(hass, miniserver, config_entry)
+    unique = {t.device_uuid: t for t in valves if t.serial}
+    for valve in unique.values():
+        entities.append(LoxoneAirValveRestartButton(valve, config_entry))
     async_add_entities(entities)
+
+
+class LoxoneAirValveRestartButton(ButtonEntity):
+    """Restart just this Air device, not the Miniserver itself."""
+
+    _attr_has_entity_name = True
+    _attr_name = "Uruchom ponownie głowicę"
+    _attr_entity_category = EntityCategory.CONFIG
+    _attr_icon = "mdi:restart"
+
+    def __init__(self, terminal, config_entry):
+        self._attr_unique_id = f"{terminal.device_uuid}_restart"
+        self._serial = terminal.serial
+        self._config_entry = config_entry
+        self._attr_device_info = get_or_create_device(
+            terminal.device_uuid, terminal.device_name, "Valve Actuator Air", ""
+        )
+
+    async def async_press(self):
+        await async_restart_valve(
+            async_get_clientsession(self.hass), self._config_entry, self._serial
+        )
 
 
 class LoxoneButton(LoxoneEntity, ButtonEntity):
