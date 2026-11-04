@@ -58,29 +58,50 @@ as an analog terminal. In this case, no signal-quality entity appears
 until the private diagnostics interface is investigated and confirmed.
 To verify RSSI manually, use Loxone Config > Air Diagnostics.
 
-## Real device TechReport
+## Real device TechReport and Link Quality
 
-The actuator's Loxone Config "Device details" report exposes
-\`RequestedPercent\`, \`DestinationPercent\`, \`Pos\`, \`StartPos\`, \`MaxPos\`,
-\`BatteryPowered\`, \`RefDriveState\`, \`ValveBusy\`, and \`DrvBusy\`.
-The integration now contains a pure text parser
-(\`parse_valve_tech_report\`) for this report, with tests. It is **not
-automatically polled yet**, because the HTTP/WebSocket path to retrieve
-the report has not been verified against the user's Miniserver.
+The physical Miniserver has been confirmed to accept this **read-only**
+service command via HTTP Basic Authentication:
 
-For externally-powered heads, diagnostic \`Batt[%]:127\` is not a
-battery percentage and must not become a 127% HA sensor. A successful
-\`RefDriveState\` indicates successful reference calibration, while
-\`RequestedPercent\` and \`DestinationPercent\` are reported percentages
-and must not be inferred from the motor's raw step position.
+\`\`\`
+GET /dev/sys/wsdevice/<16-hex-digit-Air-serial>/TechReport
+\`\`\`
 
-Eight-byte serials (16 hex digits), e.g. \`0123456789ABCDEF\`, are
-accepted in addition to older 6-byte serials.
+The returned XML contains \`<LL value="Serial:...;RequestedPercent:...;" Code="200"/>\`.
+The integration parses these semicolon-separated fields and exposes
+\`Zadane otwarcie\`, \`Otwarcie docelowe\`,
+\`Stan kalibracji\`, \`Błędy napędu\`, and
+\`Tryb zasilania\` as diagnostic sensors under the physical actuator.
 
-The \`DriveTo\` device shell command has been confirmed in a real device's
+For link quality the integration *also attempts* the read-only command:
+
+\`\`\`
+GET /dev/sys/wsdevice/<16-hex-digit-Air-serial>/GetLinkQuality
+\`\`\`
+
+**The HTTP form of GetLinkQuality has not yet been confirmed on the user's
+Miniserver**, even though it is available in Loxone Config's device shell.
+If no valid XML response or no data for this exact device is returned,
+signal-quality sensors show unavailable. Results whose \`Target\` does
+not match the actuator serial are discarded, to avoid assigning Air Base
+quality to the valve.
+
+Poll results are shared across all sensor entities for each valve:
+180 seconds for an external/unknown supply mode, and 900 seconds for
+heads paired in battery mode. Commands are never sent to drive the motor
+on a timer.
+
+For externally-powered heads, \`Batt[%]:127\` is an invalid sentinel,
+not 127% battery. The actual valve opening is **not** inferred from
+raw motor steps \`Pos\`, \`StartPos\`, or \`MaxPos\`: use the reported
+\`RequestedPercent\` and \`DestinationPercent\` as distinct targets.
+
+Eight-byte serials (16 hex digits) are supported.
+
+The \`DriveTo\` device shell command is visible in the real device's
 \`call\` list, but its argument schema, units, and remote invocation
-semantics remain **unverified**. Do not send guessed percentages or
-raw motor step values to this command.
+semantics are **unverified**. Do not send guessed percentages or
+raw step counts to this service command.
 
 ## Restart vs calibration
 
