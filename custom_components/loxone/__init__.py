@@ -30,6 +30,7 @@ from homeassistant.setup import async_setup_component
 
 from .const import (ATTR_AREA_CREATE, ATTR_CODE, ATTR_COMMAND, ATTR_DEVICE,
                     ATTR_UUID, ATTR_VALUE,
+                    CONF_AIR_BUTTON_EVENT_MAP,
                     CONF_AIR_TERMINAL_POLL_INTERVAL, DEFAULT_AIR_TERMINAL_POLL_INTERVAL,
                     CONF_LIGHTCONTROLLER_SUBCONTROLS_GEN, CONF_SCENE_GEN,
                     CONF_SCENE_GEN_DELAY, CONF_VERIFY_SSL, DEFAULT,
@@ -421,6 +422,9 @@ async def async_set_options(hass, config_entry):
         ),
         CONF_AIR_TERMINAL_POLL_INTERVAL: options_in.pop(
             CONF_AIR_TERMINAL_POLL_INTERVAL, DEFAULT_AIR_TERMINAL_POLL_INTERVAL
+        ),
+        CONF_AIR_BUTTON_EVENT_MAP: options_in.pop(
+            CONF_AIR_BUTTON_EVENT_MAP, ""
         ),
     }
     hass.config_entries.async_update_entry(
