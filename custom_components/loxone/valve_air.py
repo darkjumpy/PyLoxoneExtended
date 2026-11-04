@@ -680,6 +680,16 @@ async def async_get_valve_diagnostics(
     now = monotonic()
     interval = 900 if battery_powered is True else 180
     cached = cache.get(normalized)
+    # The pairing project's Battery flag may be stale after external 24 V
+    # is connected. Once TechReport confirms physical power, let the live
+    # BatteryPowered value determine subsequent diagnostic polling.
+    if cached is not None and cached[1].done() and not cached[1].cancelled():
+        try:
+            measured_battery = cached[1].result().get("battery_powered")
+        except Exception:  # noqa: BLE001 - a failed optional poll should recover
+            measured_battery = None
+        if isinstance(measured_battery, bool):
+            interval = 900 if measured_battery else 180
     if cached is not None and now - cached[0] < interval:
         return await cached[1]
 
