@@ -173,7 +173,7 @@ def parse_link_quality_report(report: str) -> dict[str, float]:
     """
     found: dict[str, float] = {}
     for match in re.finditer(
-        r"(?:^|[;\\r\\n])\\s*(AvgRssiRx|AvgRssiTx|AvgLqiRx|AvgLqiTx|ErrorRate|Packets)\\s*%?\\s*:\\s*(-?\\d+(?:[.,]\\d+)?)",
+        r"(?:^|[;\r\n])\s*(AvgRssiRx|AvgRssiTx|AvgLqiRx|AvgLqiTx|ErrorRate|Packets)\s*%?\s*:\s*(-?\d+(?:[.,]\d+)?)",
         report,
         re.IGNORECASE,
     ):
