@@ -264,8 +264,6 @@ def extract_air_valves(xml: bytes) -> list[AirValveTerminal]:
                 unit = "%"
             if category == "rssi":
                 unit = unit or "dB"
-            if category == "link_quality" and unit is None:
-                unit = "%"
             found.append(
                 AirValveTerminal(
                     uuid=term_uuid, device_uuid=uuid, device_name=title or "Valve Actuator Air",
