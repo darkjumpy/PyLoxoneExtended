@@ -16,6 +16,7 @@ import asyncio
 import io
 import json
 import logging
+import math
 import re
 import struct
 import xml.etree.ElementTree as ET
@@ -450,6 +451,90 @@ async def async_restart_valve(session: ClientSession, config_entry, serial: str)
         raise
     except Exception as err:
         raise HomeAssistantError("Cannot send restart command to Loxone Air") from err
+
+
+def parse_drive_to_response(payload: bytes, serial: str, position: int) -> str:
+    """Parse a write command without treating generic LL Code=200 as success.
+
+    Miniserver returns Code=200 with value='timeout' for sleeping heads.
+    Only a matching control and explicit 'ok' confirm acknowledgement.
+    """
+    from homeassistant.exceptions import HomeAssistantError
+
+    serial = _device_serial(serial)
+    if serial is None:
+        raise HomeAssistantError("Nieprawidłowy identyfikator głowicy Air")
+    expected = f"dev/sys/wsdevice/{serial}/DriveTo/{position}".lower()
+    if len(payload) > 4096:
+        raise HomeAssistantError("Odpowiedź głowicy jest za długa")
+    try:
+        root = ET.fromstring(payload)
+    except ET.ParseError as exc:
+        raise HomeAssistantError("Niepoprawna odpowiedź XML z Miniservera") from exc
+    ll = root if root.tag == "LL" else root.find(".//LL")
+    if ll is None:
+        raise HomeAssistantError("Brak odpowiedzi LL z Miniservera")
+    control = ll.get("control", "").lower()
+    if control != expected:
+        raise HomeAssistantError("Odpowiedź dotyczy innej komendy niż DriveTo")
+    if ll.get("Code") != "200":
+        raise HomeAssistantError("Miniserver odrzucił polecenie DriveTo")
+    result = (ll.get("value") or "").strip().lower()
+    if result == "ok":
+        return "ok"
+    if result == "timeout":
+        raise HomeAssistantError(
+            "Brak potwierdzenia DriveTo — głowica może spać. "
+            "Polecenie mogło zostać przyjęte; nie ponawiaj automatycznie."
+        )
+    raise HomeAssistantError(
+        "Niepotwierdzona odpowiedź na DriveTo; sprawdź pozycję głowicy"
+    )
+
+
+async def async_drive_to(
+    session: ClientSession, config_entry, serial: str, position: float,
+) -> None:
+    """Send one direct 0–100% Air actuator command (experimental).
+
+    Three real-device test values (0, 1 and 100) suggest percent semantics,
+    but no intermediate value or long-term behaviour has been verified.
+    """
+    from homeassistant.exceptions import HomeAssistantError
+
+    normalized = _device_serial(serial)
+    if normalized is None:
+        raise HomeAssistantError("Nieprawidłowy identyfikator głowicy Air")
+    if (
+        isinstance(position, bool) or not isinstance(position, (int, float))
+        or not math.isfinite(position)
+        or position != int(position) or not 0 <= position <= 100
+    ):
+        raise HomeAssistantError("DriveTo przyjmuje tylko całkowite procenty 0–100")
+    endpoint = _endpoint(config_entry)
+    if endpoint is None:
+        raise HomeAssistantError("Brak danych logowania do Miniservera")
+    base, auth = endpoint
+    value = int(position)
+    try:
+        async with session.get(
+            f"{base}/dev/sys/wsdevice/{normalized}/DriveTo/{value}",
+            auth=auth,
+            timeout=ClientTimeout(total=15),
+            allow_redirects=False,
+        ) as response:
+            if response.status != 200:
+                raise HomeAssistantError(
+                    f"Polecenie DriveTo zwróciło błąd HTTP {response.status}"
+                )
+            raw = await response.content.read(4097)
+            parse_drive_to_response(raw, normalized, value)
+    except HomeAssistantError:
+        raise
+    except Exception as exc:
+        raise HomeAssistantError(
+            "Nie udało się potwierdzić DriveTo; nie ponawiaj automatycznie"
+        ) from exc
 
 
 def parse_device_report_response(payload: bytes) -> str | None:
