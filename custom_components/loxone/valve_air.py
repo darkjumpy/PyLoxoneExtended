@@ -179,6 +179,23 @@ def _air_device_serial(device: ET.Element) -> str | None:
     return direct or derived
 
 
+def valve_output_to_percent(raw: float | None) -> int | None:
+    """Convert the documented raw Loxone Valve Actuator actor 0..10 to 0..100%.
+
+    This is the normal Loxone actor output/demand, NOT measured motor travel.
+    Never guess if a firmware returns a value outside the documented range.
+    """
+    if raw is None or isinstance(raw, bool):
+        return None
+    try:
+        value = float(raw)
+    except (TypeError, ValueError):
+        return None
+    if not math.isfinite(value) or value < 0 or value > 10:
+        return None
+    return min(100, max(0, int(value * 10 + 0.5)))
+
+
 def _device_serial(value: str | None) -> str | None:
     """Normalise verified 6-byte or 8-byte hex Air identifiers for Loxone APIs."""
     if not value:
