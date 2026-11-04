@@ -1,34 +1,29 @@
 # PyLoxone
 
-> **PyLoxone Extended fork — 2026.11.0b8 (experimental Pre-release)**
+> **PyLoxone Extended fork — 2026.11.0b9 (experimental Pre-release)**
 >
-> This repository (`darkjumpy/PyLoxoneExtended`) is a fork of
-> JoDehli/PyLoxone. Air valve control uses manually configured
-> **Loxone analog Virtual Inputs** (0–10) to drive each head, **not
-> device-shell DriveTo**. Home Assistant displays a 0–100% slider.
+> This fork (`darkjumpy/PyLoxoneExtended`) uses normal Loxone
+> analog Virtual Inputs (0–10) to control Valve Actuator Air via
+> a 0–100% Home Assistant slider, grouped under the physical head.
+> It does **not** use device-shell `DriveTo` for room heating.
 >
-> **b8 fixes b7's duplicate valve controls:** Loxone's visualized
-> `HA Valve` Slider is now assigned to its physical Valve Actuator Air,
-> including when Loxone rewrites the name's separators. The normal
-> valve output diagnostic now scales 0–10 to 0–100%.
+> **b9 fixes physical Air button event mapping:** the Miniserver can
+> publish `Wejście 1` under the output connector's UUID or a visualized
+> control UUID rather than the physical input's UUID.
+> The integration now discovers connector UUIDs and accepts an
+> **optional verified `SERIAL=EVENT_UUID` mapping** in integration
+> options. On a received press, the existing physical button entity
+> updates and HA emits `loxone_air_button_pressed`.
+> Press reporting depends on actual Miniserver WebSocket events.
 >
-> **Momentary physical button presses:** `Wejście 1` supports direct
-> WebSocket events if the Miniserver publishes them. A matching
-> visualized `HA Valve | <SERIAL> | Button` info-status control
-> forwards its event into the existing head's button entity.
-> The HA event `loxone_air_button_pressed` and `last_press` attribute
-> document detected presses. **Without Loxone publishing the digital
-> input in its visualization, HTTP polling cannot reliably detect
-> a short press.**
->
-> To install, add `https://github.com/darkjumpy/PyLoxoneExtended`
-> as a HACS custom **Integration** repository, select pre-release
-> `2026.11.0b8`, then restart Home Assistant.
-> See [b8 release notes](docs/release-2026.11.0b8.md) and
-> [Air valve + button setup](docs/valve-virtual-input-control.md).
+> In HACS, add `https://github.com/darkjumpy/PyLoxoneExtended` as
+> a custom **Integration** repository and choose the
+> `2026.11.0b9` Pre-release. Restart Home Assistant after updating.
+> See [b9 release notes](docs/release-2026.11.0b9.md) and
+> [Air valve and button setup](docs/valve-virtual-input-control.md).
 >
 > The badges and upstream installation instructions below refer to
-> the original JoDehli/PyLoxone project unless otherwise specified.
+> the original JoDehli/PyLoxone project unless otherwise indicated.
 
 ![Installs](https://img.shields.io/badge/dynamic/json?color=41BDF5&logo=home-assistant&label=Installations&cacheSeconds=15600&url=https://analytics.home-assistant.io/custom_integrations.json&query=$.loxone.total)
 [![Latest release](https://img.shields.io/github/v/release/JoDehli/PyLoxone?label=version)](https://github.com/JoDehli/PyLoxone/releases/latest)
