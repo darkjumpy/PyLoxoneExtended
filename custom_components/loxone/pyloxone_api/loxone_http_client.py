@@ -28,8 +28,8 @@ _PRIVATE_LANS = tuple(ipaddress.ip_network(cidr) for cidr in (
     "10.0.0.0/8", "172.16.0.0/12", "192.168.0.0/16"
 ))
 _LOXONE_DYNDNS_RE = re.compile(
-    r"^(?P<ip>\\d{1,3}(?:-\\d{1,3}){3})\\."
-    r"(?P<serial>[0-9a-f]{12})\\.dyndns\\.loxonecloud\\.com$",
+    r"^(?P<ip>\d{1,3}(?:-\d{1,3}){3})\."
+    r"(?P<serial>[0-9a-f]{12})\.dyndns\.loxonecloud\.com$",
     re.IGNORECASE,
 )
 
