@@ -14,7 +14,7 @@ from custom_components.loxone.pyloxone_api.loxone_http_client import (
 )
 
 IP = "192.168.2.253"
-FQDN = "192-168-2-253.504F94D17BCE.dyndns.loxonecloud.com"
+FQDN = "192-168-2-253.504f94d17bce.dyndns.loxonecloud.com"
 HTTP_URL = f"http://{IP}{CMD_GET_API_KEY}"
 HTTPS_URL = f"https://{FQDN}{CMD_GET_API_KEY}"
 
