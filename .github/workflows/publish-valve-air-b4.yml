@@ -1,0 +1,36 @@
+name: Publish valve-air beta b4
+on:
+  push:
+    branches: [feature/air-valve-manual-controls]
+    paths:
+      - .github/workflows/publish-valve-air-b4.yml
+
+permissions:
+  contents: write
+
+jobs:
+  publish:
+    if: github.repository == 'darkjumpy/PyLoxoneExtended'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Check Python syntax before publishing
+        run: python -m compileall -q custom_components/loxone tests
+      - name: Publish HACS prerelease b4
+        env:
+          GH_TOKEN: ${{ github.token }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          TAG="2026.11.0b4"
+          if gh release view "$TAG" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
+            echo "Existing release $TAG - refusing to replace"
+            exit 0
+          fi
+          gh release create "$TAG" \
+            --repo "$GITHUB_REPOSITORY" \
+            --target "$GITHUB_SHA" \
+            --title "PyLoxone Extended: Valve Actuator Air b4" \
+            --notes "Experimental: automatic Air valve discovery, battery/external pairing mode, read-only Air analog/digital terminals, RSSI/LQI if exposed, analog VirtualIn target, actuator reboot. Do not use on production heating without validating the Loxone wiring and API." \
+            --prerelease \
+            --latest=false

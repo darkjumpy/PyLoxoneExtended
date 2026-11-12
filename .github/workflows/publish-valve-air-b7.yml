@@ -1,0 +1,114 @@
+name: Publish Valve Actuator Air b7 prerelease (Virtual Input 0-10)
+
+on:
+  push:
+    branches: [feature/air-valve-manual-controls]
+    paths:
+      - .github/workflows/publish-valve-air-b7.yml
+
+permissions:
+  contents: write
+
+jobs:
+  publish:
+    if: github.repository == 'darkjumpy/PyLoxoneExtended'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Validate b7 syntax, Virtual Input control and regression checks
+        shell: bash
+        run: |
+          set -euo pipefail
+          python -m compileall -q custom_components/loxone tests
+          python -m unittest discover -s tests -p test_air_command_queue_core.py -v
+          python - <<'PY'
+          import ast
+          import json
+          import math
+          import re
+          import types
+          import xml.etree.ElementTree as ET
+          from pathlib import Path
+          manifest = json.loads(Path("custom_components/loxone/manifest.json").read_text())
+          assert manifest["version"] == "2026.11.0b7", manifest
+          assert Path("docs/release-2026.11.0b7.md").is_file()
+          assert Path("docs/valve-virtual-input-control.md").is_file()
+
+          p = Path("custom_components/loxone/valve_air.py")
+          tree = ast.parse(p.read_text(encoding="utf-8"))
+          names = {
+              "_device_serial", "expected_valve_input_name",
+              "_direct_target_input", "valve_output_to_percent",
+          }
+          functions = [
+              node for node in tree.body
+              if isinstance(node, ast.FunctionDef) and node.name in names
+          ]
+          assert len(functions) == 4, [node.name for node in functions]
+          env = {
+              "re": re, "math": math, "ET": ET,
+              "_LOGGER": types.SimpleNamespace(warning=lambda *args: None),
+          }
+          exec(compile(ast.Module(body=functions, type_ignores=[]), str(p), "exec"), env)
+          serial = "504F94FFFEC51C12"
+          expected = f"HA Valve | {serial} | Value"
+          assert env["expected_valve_input_name"](serial, "WC") == expected
+          root = ET.fromstring(
+              f'<Loxone><C Type="VirtualIn" U="vir-input" Title="{expected}"/>'
+              f'</Loxone>'
+          )
+          assert env["_direct_target_input"](root, "WC", serial) == "vir-input"
+          root = ET.fromstring(
+              f'<Loxone><C Type="VirtualIn" U="vir-input" '
+              f'Title="{expected}" Digital="true"/></Loxone>'
+          )
+          assert env["_direct_target_input"](root, "WC", serial) is None
+          assert env["valve_output_to_percent"](0) == 0
+          assert env["valve_output_to_percent"](3) == 30
+          assert env["valve_output_to_percent"](6.5) == 65
+          assert env["valve_output_to_percent"](10) == 100
+          assert env["valve_output_to_percent"](11) is None
+
+          number = Path("custom_components/loxone/number.py").read_text(encoding="utf-8")
+          binary = Path("custom_components/loxone/binary_sensor.py").read_text(encoding="utf-8")
+          assert "LoxoneAirValveVirtualInputNumber" in number
+          assert "async_set_valve_virtual_input(" in number
+          assert "async_drive_to(" not in number
+          assert "async_get_air_command_queue" not in number
+          assert "LoxoneAirPendingCommandSensor(" not in binary
+          assert "/jdev/sps/io/{quote(uuid, safe='-')}/{command}" in p.read_text(encoding="utf-8")
+          settings = json.loads(Path("custom_components/loxone/translations/pl.json").read_text())
+          assert "air_terminal_poll_interval" in settings["options"]["step"]["init"]["data"]
+          print("b7 VirtualIn control, analog range, no-DriveTo and translation checks passed")
+          PY
+
+      - name: Publish new b7 pre-release from tested feature-branch commit
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          TAG="2026.11.0b7"
+          if gh release view "$TAG" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
+            echo "::error::Release $TAG already exists; refusing to overwrite"
+            exit 1
+          fi
+          if gh api "repos/$GITHUB_REPOSITORY/git/ref/tags/$TAG" >/dev/null 2>&1; then
+            echo "::error::Tag $TAG unexpectedly exists; refusing to move it"
+            exit 1
+          fi
+          gh release create "$TAG" \
+            --repo "$GITHUB_REPOSITORY" \
+            --target "$GITHUB_SHA" \
+            --title "PyLoxone Extended 2026.11.0b7 — HA Valve Virtual Inputs" \
+            --notes-file docs/release-2026.11.0b7.md \
+            --prerelease \
+            --latest=false
+          ACTUAL="$(gh api "repos/$GITHUB_REPOSITORY/git/ref/tags/$TAG" --jq '.object.sha')"
+          if [[ "$ACTUAL" != "$GITHUB_SHA" ]]; then
+            echo "::error::Release $TAG points to $ACTUAL instead of tested $GITHUB_SHA"
+            exit 1
+          fi
+          gh release view "$TAG" --repo "$GITHUB_REPOSITORY" \
+            --json tagName,isPrerelease,url --jq '{tag: .tagName, prerelease: .isPrerelease, url: .url}'

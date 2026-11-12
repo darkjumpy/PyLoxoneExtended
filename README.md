@@ -1,4 +1,30 @@
 # PyLoxone
+
+> **PyLoxone Extended fork — 2026.11.0b9 (experimental Pre-release)**
+>
+> This fork (`darkjumpy/PyLoxoneExtended`) uses normal Loxone
+> analog Virtual Inputs (0–10) to control Valve Actuator Air via
+> a 0–100% Home Assistant slider, grouped under the physical head.
+> It does **not** use device-shell `DriveTo` for room heating.
+>
+> **b9 fixes physical Air button event mapping:** the Miniserver can
+> publish `Wejście 1` under the output connector's UUID or a visualized
+> control UUID rather than the physical input's UUID.
+> The integration now discovers connector UUIDs and accepts an
+> **optional verified `SERIAL=EVENT_UUID` mapping** in integration
+> options. On a received press, the existing physical button entity
+> updates and HA emits `loxone_air_button_pressed`.
+> Press reporting depends on actual Miniserver WebSocket events.
+>
+> In HACS, add `https://github.com/darkjumpy/PyLoxoneExtended` as
+> a custom **Integration** repository and choose the
+> `2026.11.0b9` Pre-release. Restart Home Assistant after updating.
+> See [b9 release notes](docs/release-2026.11.0b9.md) and
+> [Air valve and button setup](docs/valve-virtual-input-control.md).
+>
+> The badges and upstream installation instructions below refer to
+> the original JoDehli/PyLoxone project unless otherwise indicated.
+
 ![Installs](https://img.shields.io/badge/dynamic/json?color=41BDF5&logo=home-assistant&label=Installations&cacheSeconds=15600&url=https://analytics.home-assistant.io/custom_integrations.json&query=$.loxone.total)
 [![Latest release](https://img.shields.io/github/v/release/JoDehli/PyLoxone?label=version)](https://github.com/JoDehli/PyLoxone/releases/latest)
 ![Hassfest](https://img.shields.io/github/actions/workflow/status/JoDehli/PyLoxone/hassfest.yaml?label=hassfest)

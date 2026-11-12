@@ -1,7 +1,7 @@
 # Valve Actuator Air — experimental physical devices
 
 This is the next feature of PyLoxoneExtended, extending **existing Loxone
-integration**. It is intentionally read-only and **automatically enabled on integration startup**.
+integration**. Physical discovery and the terminal sensors are read-only and **automatically enabled on integration startup**. An additional, experimental direct DriveTo slider is available for eligible heads in b5.
 
 ## Why a separate discovery step?
 
@@ -13,7 +13,8 @@ the Miniserver does.
 We read the latest installed sps_*.LoxCC or sps_*.zip **only once per
 integration load** (from /dev/fslist/prog, /dev/fsget/prog/...) and look for
 LoxAIRDevice containers with recognizable Valve Actuator names. Terminal
-values are read from /jdev/sps/io/<terminal-uuid>, no write endpoints.
+values are read from /jdev/sps/io/<terminal-uuid>. Only the separate explicit
+b5 DriveTo slider sends commands to the selected physical actuator.
 
 ## What it creates
 
@@ -23,7 +24,7 @@ values are read from /jdev/sps/io/<terminal-uuid>, no write endpoints.
   * Analog actuator output / valve demand (raw 0–10 unless the device's
     Display unit explicitly says otherwise).
   * Battery level (when exposed).
-  * **Power source / Tryb zasilania**: Baterie / Zasilanie zewnętrzne / Nieznane, based on the **Battery** attribute stored on the physical LoxAIRDevice in the pairing program. The value is static until the program changes; it is **NOT** a real-time measurement of supply voltage or proof that the power cable is currently connected.
+  * **Power source / Tryb zasilania**: Baterie / Zasilanie zewnętrzne / Nieznane from the physical head's **TechReport / BatteryPowered**, not the project's potentially outdated Battery flag. Until a valid report is received, this shows **Nieznane**. The project's original `Battery` setting remains available as `configured_battery_mode` in sensor attributes but must not be treated as live physical supply.
   * Online and physical digital input states (when present).
 * Where an already-visualized InfoOnlyAnalog / InfoOnlyDigital control has the
   same physical terminal UUID, it is **reused and grouped** instead of
@@ -34,6 +35,15 @@ actuator with a sensor; the room control logic is still in Loxone.
 **Do not command the actuator directly** while Loxone's room controller is
 driving it. The measured physical valve position is also not guaranteed to be
 available; the analog output reports the commanded position.
+
+## Manual position and device restart
+
+An experimental **direct DriveTo** 0–100% slider and an actuator restart
+button are described in [Valve manual controls](valve-manual-controls.md).
+No Virtual Inputs are required. For battery heads, command delivery is not
+reliable while asleep; b5 does **not** implement remote automatic wake-up.
+The position slider shows the last acknowledged request, not a measured
+motor position. A verified dedicated calibration API is still unavailable.
 
 ## Automatic discovery
 
@@ -51,9 +61,10 @@ network in clear text. This feature now runs automatically, so only install this
 branch on a trusted LAN; prefer TLS where supported.
 Do not expose the Miniserver endpoints to the Internet.
 
-This experimental version uses 120-second polling for new physical terminal
-entities. Battery-powered Air devices generally update at their own configured
-interval (5–20 minutes). Changes may not appear immediately.
+Physical terminal entities use 120-second polling. Diagnostic reports are cached
+for 180 seconds when a head is externally powered and 900 seconds when it is
+battery powered. Physical Air heads can only be contacted when responsive;
+changes may not appear immediately.
 
 ## How to verify
 
@@ -76,8 +87,9 @@ logger:
     custom_components.loxone.valve_air: debug
 \`\`\`
 
-The detected project hierarchy is firmware-dependent, and is **not yet
-validated against a real installation with Valve Actuator Air**. Please send
+Physical DriveTo control was exercised on one real HW3 battery Air head;
+project hierarchy parsing and end-to-end HA behavior still require
+validation on the user's installed Miniserver and HA. Please send
 redacted diagnostics or a sanitized relevant excerpt from a local Loxone
 project rather than full credentials or a public copy of your project.
 
