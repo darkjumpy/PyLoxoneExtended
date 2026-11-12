@@ -1,6 +1,6 @@
 {
-    "name": "PyLoxone",
-    "country": "DE",
+    "name": "PyLoxone Extended",
+    "country": "PL",
     "hacs": "2.0.5",
     "render_readme": true,
     "homeassistant": "2025.2.4"
