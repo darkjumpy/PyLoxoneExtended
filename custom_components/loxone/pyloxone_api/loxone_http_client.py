@@ -184,6 +184,8 @@ class LoxoneAsyncHttpClient:
             # Response contexts stay open while callers read the body.
             async with self.session.get(request_url, **request_kwargs) as response:
                 if response.status in _REDIRECT_CODES:
+                    if new_base_url is not None:
+                        raise ValueError("Refusing chained HTTPS redirects")
                     # Some Miniservers only redirect a request with Basic
                     # credentials. Check the target before *any* second GET.
                     new_base_url = _validated_loxone_https_redirect(
@@ -248,6 +250,9 @@ class LoxoneAsyncHttpClient:
         """Persist verified HTTPS for subsequent bootstrap GETs."""
         self.base_url = https_base_url
         self.scheme = "https"
+        # Automatic redirects always use verified TLS, including later
+        # LoxAPP3.json and getPublicKey bootstrap requests.
+        self.verify_ssl = True
         self.upgraded_https = True
         _LOGGER.info("Verified Loxone HTTPS redirect; using %s", https_base_url)
 
