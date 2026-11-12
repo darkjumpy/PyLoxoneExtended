@@ -3111,17 +3111,23 @@ class LoxoneConnection(LoxoneBaseConnection):
                         MessageForQueue(f"{CMD_ENABLE_UPDATES}", True)
                     )
                 else:
-                    # 4003 is a hard auth failure, not a token-expiry retry.
+                    # User blocked, disabled or lacking permission: stop
+                    # retrying instead of risking more failed login attempts.
                     if mess_obj.code in LLRSP_UNAUTHORISED_CODES:
                         self._check_auth_response(mess_obj, "authwithtoken")
-                    # During reboot the server can report 503/901. Preserve
-                    # the cached token for those transient responses; other
-                    # rejections fall back to username/password next time.
+                    if mess_obj.code in (403, 423):
+                        self._auth_failure = LoxoneUnauthorisedError(
+                            f"authwithtoken rejected (code {mess_obj.code})"
+                        )
+                        raise self._auth_failure
+                    # A reboot/overloaded server may return 500, 503 or 901.
+                    # Keep the cached token for transient server errors;
+                    # other rejections fall back to password authentication.
                     _LOGGER.warning(
                         "Cached-token login returned code %s; reconnecting",
                         mess_obj.code,
                     )
-                    if mess_obj.code not in (503, 901):
+                    if mess_obj.code not in (500, 503, 901):
                         self.reset_token()
                     self._reconnect_event.set()
 
