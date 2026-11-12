@@ -1688,6 +1688,9 @@ class LoxoneConnection(LoxoneBaseConnection):
             # event and exit.
             if not self._shutdown_event.is_set():
                 self._closed = False
+                # The previous session's successful login must not leak into
+                # future attempts (or continually reset their backoff).
+                self._authenticated_event.clear()
         except Exception as e:
             _LOGGER.debug("_safe_close: close() raised: %s", e)
 
