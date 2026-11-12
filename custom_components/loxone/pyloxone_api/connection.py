@@ -154,6 +154,12 @@ DEFAULT_PORTS: dict[str, int] = {
 }
 
 
+# A fresh websocket must finish the Loxone key exchange and token login.
+# An open TCP/WebSocket connection without authentication is not usable;
+# do not wait indefinitely for the next keepalive after a Miniserver reboot.
+AUTHENTICATION_TIMEOUT_SECONDS = 30.0
+
+
 # Websocket close codes after which reconnecting cannot succeed
 # (spec "Communicating with the Miniserver": Websocket Close Codes and
 # "What can go wrong?"). Retrying them forever only spams the
@@ -1396,6 +1402,24 @@ class LoxoneConnection(LoxoneBaseConnection):
             _LOGGER.error(f"Failed to send key exchange: {e}")
             raise
 
+        async def authentication_watchdog() -> None:
+            """Reconnect if a websocket never completes its login handshake."""
+            try:
+                await asyncio.wait_for(
+                    self._authenticated_event.wait(),
+                    timeout=AUTHENTICATION_TIMEOUT_SECONDS,
+                )
+            except asyncio.TimeoutError as exc:
+                # A stalled getkey2/authwithtoken/getjwt exchange can leave
+                # the socket OPEN but unusable. A fresh bootstrap fetches
+                # the current Miniserver public key before retrying.
+                if self._auth_failure is not None:
+                    raise self._auth_failure from exc
+                raise LoxoneConnectionError(
+                    "Miniserver did not authenticate websocket within "
+                    f"{AUTHENTICATION_TIMEOUT_SECONDS:g}s"
+                ) from exc
+
         async def reconnect_task() -> None:
             try:
                 while True:
@@ -1435,6 +1459,7 @@ class LoxoneConnection(LoxoneBaseConnection):
             asyncio.create_task(keep_alive()),
             asyncio.create_task(check_refresh_token()),
             asyncio.create_task(reconnect_task()),
+            asyncio.create_task(authentication_watchdog()),
         ]
 
         try:
@@ -1663,6 +1688,9 @@ class LoxoneConnection(LoxoneBaseConnection):
             # event and exit.
             if not self._shutdown_event.is_set():
                 self._closed = False
+                # The previous session's successful login must not leak into
+                # future attempts (or continually reset their backoff).
+                self._authenticated_event.clear()
         except Exception as e:
             _LOGGER.debug("_safe_close: close() raised: %s", e)
 
@@ -2710,6 +2738,11 @@ class LoxoneConnection(LoxoneBaseConnection):
                     self._note_connection_lost(f"auth escalated: {e}")
                     raise
                 except self.RETRYABLE_SESSION_ERRORS as e:
+                    # Reset exponential backoff after any authenticated
+                    # session: an outage after weeks online starts with the
+                    # short initial delay, not the last outage's delay.
+                    if self._authenticated_event.is_set():
+                        attempt = 0
                     self._note_connection_lost(
                         f"session error: {e}"
                     )
@@ -3069,20 +3102,34 @@ class LoxoneConnection(LoxoneBaseConnection):
                     _LOGGER.debug("Token authentication failed (401); resetting and re-authenticating")
                     self.reset_token()
                     self._reconnect_event.set()
+                elif mess_obj.code == 200:
+                    # Enable state updates only after a *confirmed* login.
+                    # Previously any response other than 401 (including 503)
+                    # started updates without setting the authenticated flag.
+                    await self._on_authenticated()
+                    await self._message_queue.put(
+                        MessageForQueue(f"{CMD_ENABLE_UPDATES}", True)
+                    )
                 else:
-                    _LOGGER.debug("Got message authwithtoken")
-                    try:
-                        # Cached-token authentication is a successful
-                        # authentication path too. Signal the refresh
-                        # loop and manual refresh service just as the
-                        # gettoken/getjwt handler does.
-                        if mess_obj.code == 200:
-                            await self._on_authenticated()
-                        await self._message_queue.put(
-                            MessageForQueue(f"{CMD_ENABLE_UPDATES}", True)
+                    # User blocked, disabled or lacking permission: stop
+                    # retrying instead of risking more failed login attempts.
+                    if mess_obj.code in LLRSP_UNAUTHORISED_CODES:
+                        self._check_auth_response(mess_obj, "authwithtoken")
+                    if mess_obj.code in (403, 423):
+                        self._auth_failure = LoxoneUnauthorisedError(
+                            f"authwithtoken rejected (code {mess_obj.code})"
                         )
-                    except asyncio.TimeoutError:
-                        _LOGGER.error("Timeout queueing authwithtoken command")
+                        raise self._auth_failure
+                    # A reboot/overloaded server may return 500, 503 or 901.
+                    # Keep the cached token for transient server errors;
+                    # other rejections fall back to password authentication.
+                    _LOGGER.warning(
+                        "Cached-token login returned code %s; reconnecting",
+                        mess_obj.code,
+                    )
+                    if mess_obj.code not in (500, 503, 901):
+                        self.reset_token()
+                    self._reconnect_event.set()
 
             # Handle token refresh
             elif isinstance(mess_obj, TextMessage) and (
