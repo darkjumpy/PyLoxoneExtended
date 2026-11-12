@@ -2296,6 +2296,21 @@ class LoxoneConnection(LoxoneBaseConnection):
             self.miniserver_serial = value.get("snr", "")
             local = value.get("local", True)
 
+            # A Miniserver Compact on a local HTTP address can insist on
+            # redirecting /jdev/cfg/apiKey to its signed Cloud-DNS HTTPS
+            # hostname, even while reporting local=True. Our HTTP client
+            # only accepts that redirect after validating the embedded
+            # LAN IP, host pattern, API path and TLS certificate. Carry
+            # its verified HTTPS origin forward to the structure-file,
+            # public-key and WebSocket (WSS) connections.
+            if connector.upgraded_https:
+                new_scheme, new_host = parse_loxone_url(connector.base_url)
+                self._apply_url(new_scheme, new_host)
+                # Auto-upgrades always verify HTTPS and WSS certificates;
+                # the original option may have disabled it for a manually
+                # entered HTTPS host with a self-signed certificate.
+                self.verify_ssl = True
+
             if not local:
                 try:
                     connector.base_url = (
