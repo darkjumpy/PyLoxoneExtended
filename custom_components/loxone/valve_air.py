@@ -568,13 +568,30 @@ def _endpoint(config_entry) -> tuple[str, BasicAuth] | None:
     username, password = opts.get(CONF_USERNAME), opts.get(CONF_PASSWORD)
     if not host or not username or not password:
         return None
-    parts = urlsplit(host if "://" in host else "http://" + host)
+    # Use the actual API transport after bootstrap. Loxone Compact may
+    # upgrade local HTTP:80 to verified HTTPS:443 on its Cloud-DNS host;
+    # config_entry.options deliberately retains the original user setting.
+    # Reusing it here would cause a 308 and aiohttp would strip Basic Auth.
+    connection = getattr(config_entry, "runtime_data", None)
+    scheme = getattr(connection, "scheme", None)
+    address = getattr(connection, "url", None)
+    resolved = scheme in ("http", "https") and isinstance(address, str) and bool(address)
+    if resolved:
+        parts = urlsplit(f"{scheme}://{address}")
+    else:
+        parts = urlsplit(host if "://" in host else "http://" + host)
     if parts.scheme not in ("http", "https") or not parts.hostname:
         return None
-    port = parts.port or int(opts.get(CONF_PORT) or (443 if parts.scheme == "https" else 80))
+    try:
+        if resolved:
+            port = parts.port or (443 if parts.scheme == "https" else 80)
+        else:
+            port = parts.port or int(opts.get(CONF_PORT) or (443 if parts.scheme == "https" else 80))
+    except ValueError:
+        return None
     authority = "[" + parts.hostname + "]" if ":" in parts.hostname else parts.hostname
     base = f"{parts.scheme}://{authority}:{port}"
-    return base, BasicAuth(str(username), str(password))
+    return base, BasicAuth(str(username), str(password), encoding="utf-8")
 
 
 async def _fetch_project(session: ClientSession, config_entry) -> bytes | None:
