@@ -8,6 +8,7 @@ response format need verification against real firmware before release.
 from __future__ import annotations
 
 import logging
+from urllib.parse import urlsplit
 
 from aiohttp import ClientError, ClientSession, ClientTimeout
 from yarl import URL
@@ -25,7 +26,23 @@ class AudioStatusClient:
 
     def __init__(self, session: ClientSession, host: str) -> None:
         self._session = session
-        self._base_url = str(URL.build(scheme="http", host=host, port=AUDIO_PORT))
+        # Options may contain either a bare LAN IP or a full HTTPS
+        # Cloud-DNS URL (required on Miniservers preferring HTTPS).
+        # The audio-status service uses its own port and HTTP scheme;
+        # never pass "https://..." as URL.build(host=...).
+        parsed = urlsplit(host if "://" in host else f"//{host}")
+        if (
+            not parsed.hostname
+            or parsed.username is not None
+            or parsed.password is not None
+            or parsed.path not in ("", "/")
+            or parsed.query
+            or parsed.fragment
+        ):
+            raise ValueError("Invalid Miniserver audio hostname")
+        self._base_url = str(
+            URL.build(scheme="http", host=parsed.hostname, port=AUDIO_PORT)
+        )
 
     async def async_get_metadata(self, player_id: int) -> AudioMetadata | None:
         """Fetch zone metadata; None means an unreadable or unknown response."""

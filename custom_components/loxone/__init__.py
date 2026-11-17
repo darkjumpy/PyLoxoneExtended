@@ -329,6 +329,9 @@ async def async_unload_entry(hass, config_entry):
 
         hass.data[DOMAIN].pop(config_entry.entry_id, None)
 
+    # Never reuse a retired transport across a config entry reload.
+    config_entry.runtime_data = None
+
     # Services are not removed here: the integration-wide ones are
     # registered once in ``async_setup`` and route per call, and the
     # cover entity services belong to the platform (HA manages them).
