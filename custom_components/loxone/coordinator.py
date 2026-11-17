@@ -142,6 +142,14 @@ class LoxoneCoordinator(DataUpdateCoordinator):
             # unauthenticated during platform setup and the Miniserver
             # would close it (issue #527).
             await self.api.open(session, connect_websocket=False)
+            # Store the *live*, verified transport on this config entry.
+            # After a local HTTP:80 → Cloud-DNS HTTPS:443 upgrade the
+            # originally configured host/port is no longer the HTTP API
+            # endpoint. The optional Air/Valve platforms must use the same
+            # resolved endpoint for their separate API calls, rather than
+            # hitting HTTP:80 again and losing Basic Auth on a 308 redirect.
+            # The connection object also follows future reconnect upgrades.
+            self.config_entry.runtime_data = self.api
         except LoxoneException as e:
             _LOGGER.error("Could not connect to Loxone Miniserver")
             raise e
